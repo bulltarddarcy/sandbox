@@ -6,6 +6,7 @@ With multi-theme support, smart filters, and comprehensive scoring.
 import streamlit as st
 import pandas as pd
 import utils_sector as us
+import utils_darcy as ud  # [NEW] Import Darcy utils for Price Divergence Logic
 
 # ==========================================
 # UI HELPERS
@@ -80,11 +81,8 @@ def run_sector_rotation_app(df_global=None):
     # --- [NEW] PRE-PROCESS LAST TRADE DATES FROM GSHEET ---
     last_trade_map = {}
     if df_global is not None and not df_global.empty:
-        # Check required columns exist
         if "Symbol" in df_global.columns and "Trade Date" in df_global.columns:
             try:
-                # Create a dictionary {Symbol: Max_Date}
-                # Ensure date is datetime type
                 temp_df = df_global.copy()
                 temp_df["Trade Date"] = pd.to_datetime(temp_df["Trade Date"], errors='coerce')
                 last_trade_map = temp_df.groupby("Symbol")["Trade Date"].max().to_dict()
@@ -686,20 +684,48 @@ def run_sector_rotation_app(df_global=None):
                 elif fading:
                     pattern = "⚠️ Fading"
                 
-                # Divergence indicator
-                div_label = ""
+                # 1. RENAME: Div_Sector (was Divergence)
+                div_sector_label = ""
                 if divergence == 'bullish_divergence':
-                    div_label = "📈 Bull Div"
+                    div_sector_label = "📈 Bull Div"
                 elif divergence == 'bearish_divergence':
-                    div_label = "📉 Bear Div"
+                    div_sector_label = "📉 Bear Div"
+
+                # 2. NEW: Div_Price_RSI (Using Price Divergence Page logic)
+                # Defaults: Daily, 90 lookback, High/Low source, recent only (25 days)
+                div_price_rsi_label = ""
+                try:
+                    # Prepare Data (calculate RSI if needed)
+                    d_d, _ = ud.prepare_data(sdf.copy())
+                    if d_d is not None:
+                        # Scan for divergences
+                        rsi_divs = ud.find_divergences(
+                            d_d, stock, 'Daily', 
+                            min_n=0,
+                            periods_input=[14], # Standard RSI
+                            optimize_for='PF',
+                            lookback_period=90,          # Matches Max Candle Between Pivots: 90
+                            price_source='High/Low',     # Matches Candle Price Methodology: High/Low
+                            strict_validation=True,      # Matches Strict 50-Cross Invalidation: Yes
+                            recent_days_filter=25,       # Matches Days Since Signal: 25
+                            rsi_diff_threshold=2.0       # Matches Min RSI Delta: 2
+                        )
+                        if rsi_divs:
+                            latest_sig = rsi_divs[-1]
+                            # Format: 🟢 Bull (30)
+                            icon = "🟢" if latest_sig['Type'] == 'Bullish' else "🔴"
+                            div_price_rsi_label = f"{icon} {latest_sig['Type']} ({latest_sig['RSI_Display']})"
+                except Exception:
+                    # Fail silently if Darcy utils diverge or missing data
+                    pass
                 
-                # --- [NEW] GET LAST OPTIONS TRADE DATE ---
+                # 3. RENAME: Last Option Trade (was Last Options Trade)
                 last_trade_val = last_trade_map.get(stock)
                 if pd.notna(last_trade_val):
                     last_trade_str = last_trade_val.strftime("%Y-%m-%d")
                 else:
                     last_trade_str = "None"
-                
+
                 ranking_data.append({
                     "Ticker": stock,
                     "Score": score_data['total_score'] if score_data else 0,
@@ -713,8 +739,11 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
                     "Pattern": pattern,
-                    "Divergence": div_label,
-                    "Last Options Trade": last_trade_str,
+                    
+                    "Div_Sector": div_sector_label,       # RENAMED
+                    "Div_Price_RSI": div_price_rsi_label, # NEW
+                    "Last Option Trade": last_trade_str,  # RENAMED
+                    
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -726,7 +755,7 @@ def run_sector_rotation_app(df_global=None):
                 })
                 
             except Exception as e:
-                st.error(f"Error processing {stock}: {e}")
+                # st.error(f"Error processing {stock}: {e}")
                 continue
 
     if not ranking_data:
@@ -746,6 +775,26 @@ def run_sector_rotation_app(df_global=None):
     # Display columns (excluding hidden filter columns)
     display_cols = [c for c in df_ranked.columns if not c.startswith('_')]
     
+    # Helper for consistent column config
+    def get_column_config():
+        return {
+            "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+            "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+            "Grade": st.column_config.TextColumn("Grade", width="small"),
+            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+            "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+            "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
+            "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
+            "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
+            "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
+            "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
+            "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
+            # UPDATED COLUMNS CONFIG
+            "Div_Sector": st.column_config.TextColumn("Div (Sector)", width="small"),
+            "Div_Price_RSI": st.column_config.TextColumn("Div (RSI)", width="medium"),
+            "Last Option Trade": st.column_config.TextColumn("Last Option", width="medium"),
+        }
+
     with tab1:
         st.caption(f"Showing {len(df_ranked)} stocks sorted by comprehensive score")
         
@@ -776,20 +825,7 @@ def run_sector_rotation_app(df_global=None):
             df_ranked[display_cols].style.apply(highlight_top_scores, axis=1),
             hide_index=True,
             use_container_width=True,
-            column_config={
-                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
-                "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
-                "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
-                "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
-                "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
-                "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
-                "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
-            }
+            column_config=get_column_config()
         )
     
     with tab2:
@@ -803,13 +839,7 @@ def run_sector_rotation_app(df_global=None):
                 breakouts[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                    "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
-                    "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
-                }
+                column_config=get_column_config()
             )
         else:
             st.info("No breakout patterns detected currently")
@@ -825,9 +855,7 @@ def run_sector_rotation_app(df_global=None):
                 dip_buys[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
-                }
+                column_config=get_column_config()
             )
         else:
             st.info("No dip buy setups currently")
@@ -843,9 +871,7 @@ def run_sector_rotation_app(df_global=None):
                 faders[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
-                }
+                column_config=get_column_config()
             )
         else:
             st.success("✅ No concerning faders detected")
