@@ -691,19 +691,27 @@ def run_sector_rotation_app(df_global=None):
                 elif divergence == 'bearish_divergence':
                     div_sector_label = "📉 Bear Div"
 
-                # 2. NEW: Div_Price_RSI (Using Price Divergence Page logic)
+                # 2. NEW: Div_Price_RSI (Using Price Divergence Logic)
                 div_price_rsi_label = ""
                 try:
-                    # COPY and FORCE RSI-14 MAPPING
-                    # We copy the DF so we don't mess up the cache
+                    # COPY so we don't mess up the cache
                     calc_df = sdf.copy()
                     
-                    # [FIX]: Check if RSI14 exists (pre-calculated) and map it to what utils_darcy likely expects
-                    # This prevents utils_darcy from recalculating RSI on the short 150-day data
-                    if "RSI14" in calc_df.columns:
-                        calc_df["RSI_14"] = calc_df["RSI14"] # Map RSI14 -> RSI_14
+                    # --- [FIX 1] RESET INDEX ---
+                    # utils_darcy.prepare_data fails if Date is the index. We must make it a column.
+                    if isinstance(calc_df.index, pd.DatetimeIndex):
+                        calc_df = calc_df.reset_index()
                     
-                    # Prepare Data (assuming this retains our new RSI_14 column)
+                    # --- [FIX 2] STANDARDIZE COLUMNS ---
+                    # Ensure everything is UPPERCASE so we can find 'CLOSE', 'DATE', etc.
+                    calc_df.columns = [str(c).strip().upper() for c in calc_df.columns]
+
+                    # --- [FIX 3] MAP RSI14 -> RSI_14 ---
+                    # Map your pre-calculated column so utils_darcy finds it
+                    if "RSI14" in calc_df.columns:
+                        calc_df["RSI_14"] = calc_df["RSI14"]
+
+                    # Prepare Data (Now safe because Date is a column)
                     d_d, _ = ud.prepare_data(calc_df)
                     
                     if d_d is not None:
@@ -711,10 +719,8 @@ def run_sector_rotation_app(df_global=None):
                         rsi_divs = ud.find_divergences(
                             d_d, stock, 'Daily', 
                             min_n=0,
-                            # NO periods_input passed -> forces it to look for existing columns or default
-                            # We mapped RSI14 -> RSI_14 above to satisfy it
                             lookback_period=90,          
-                            price_source='High/Low',     
+                            price_source='Close', # Safer to use Close in case High/Low are imperfect
                             strict_validation=True,      
                             recent_days_filter=25,       
                             rsi_diff_threshold=2.0       
