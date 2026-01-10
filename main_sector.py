@@ -692,31 +692,38 @@ def run_sector_rotation_app(df_global=None):
                     div_sector_label = "📉 Bear Div"
 
                 # 2. NEW: Div_Price_RSI (Using Price Divergence Page logic)
-                # MODIFIED: No RSI period parameter passed, relies on existing RSI14 column
                 div_price_rsi_label = ""
                 try:
-                    # Prepare Data (assuming this retains RSI14)
-                    d_d, _ = ud.prepare_data(sdf.copy())
+                    # COPY and FORCE RSI-14 MAPPING
+                    # We copy the DF so we don't mess up the cache
+                    calc_df = sdf.copy()
+                    
+                    # [FIX]: Check if RSI14 exists (pre-calculated) and map it to what utils_darcy likely expects
+                    # This prevents utils_darcy from recalculating RSI on the short 150-day data
+                    if "RSI14" in calc_df.columns:
+                        calc_df["RSI_14"] = calc_df["RSI14"] # Map RSI14 -> RSI_14
+                    
+                    # Prepare Data (assuming this retains our new RSI_14 column)
+                    d_d, _ = ud.prepare_data(calc_df)
+                    
                     if d_d is not None:
-                        # Scan for divergences (no calculation parameters)
+                        # Scan for divergences
                         rsi_divs = ud.find_divergences(
                             d_d, stock, 'Daily', 
                             min_n=0,
-                            # NO periods_input passed
-                            # NO optimize_for passed
-                            lookback_period=90,          # Matches Max Candle Between Pivots: 90
-                            price_source='High/Low',     # Matches Candle Price Methodology: High/Low
-                            strict_validation=True,      # Matches Strict 50-Cross Invalidation: Yes
-                            recent_days_filter=25,       # Matches Days Since Signal: 25
-                            rsi_diff_threshold=2.0       # Matches Min RSI Delta: 2
+                            # NO periods_input passed -> forces it to look for existing columns or default
+                            # We mapped RSI14 -> RSI_14 above to satisfy it
+                            lookback_period=90,          
+                            price_source='High/Low',     
+                            strict_validation=True,      
+                            recent_days_filter=25,       
+                            rsi_diff_threshold=2.0       
                         )
                         if rsi_divs:
                             latest_sig = rsi_divs[-1]
-                            # Format: 🟢 Bull (30)
                             icon = "🟢" if latest_sig['Type'] == 'Bullish' else "🔴"
                             div_price_rsi_label = f"{icon} {latest_sig['Type']} ({latest_sig['RSI_Display']})"
                 except Exception:
-                    # Fail silently if Darcy utils diverge or missing data
                     pass
                 
                 # 3. RENAME: Last Option Trade (was Last Options Trade)
