@@ -77,6 +77,20 @@ def run_sector_rotation_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
+    # --- [NEW] PRE-PROCESS LAST TRADE DATES FROM GSHEET ---
+    last_trade_map = {}
+    if df_global is not None and not df_global.empty:
+        # Check required columns exist
+        if "Symbol" in df_global.columns and "Trade Date" in df_global.columns:
+            try:
+                # Create a dictionary {Symbol: Max_Date}
+                # Ensure date is datetime type
+                temp_df = df_global.copy()
+                temp_df["Trade Date"] = pd.to_datetime(temp_df["Trade Date"], errors='coerce')
+                last_trade_map = temp_df.groupby("Symbol")["Trade Date"].max().to_dict()
+            except Exception:
+                pass
+
     # --- 4. RRG QUADRANT GRAPHIC ---
     st.subheader("Rotation Quadrant Graphic")
 
@@ -277,8 +291,7 @@ def run_sector_rotation_app(df_global=None):
             - Score 60+
             → **Action:** Best time to enter new positions
             
-            **⚖️ Established Leadership**  
-            - Strong but been leading for days
+            **⚖️ Established Leadership** - Strong but been leading for days
             - High score but not fresh
             → **Action:** Hold positions, don't chase
             
@@ -680,6 +693,13 @@ def run_sector_rotation_app(df_global=None):
                 elif divergence == 'bearish_divergence':
                     div_label = "📉 Bear Div"
                 
+                # --- [NEW] GET LAST OPTIONS TRADE DATE ---
+                last_trade_val = last_trade_map.get(stock)
+                if pd.notna(last_trade_val):
+                    last_trade_str = last_trade_val.strftime("%Y-%m-%d")
+                else:
+                    last_trade_str = "None"
+                
                 ranking_data.append({
                     "Ticker": stock,
                     "Score": score_data['total_score'] if score_data else 0,
@@ -694,6 +714,7 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 20d": last.get('RVOL_Long', 0),
                     "Pattern": pattern,
                     "Divergence": div_label,
+                    "Last Options Trade": last_trade_str,
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -767,6 +788,7 @@ def run_sector_rotation_app(df_global=None):
                 "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
                 "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
                 "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
+                "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
             }
         )
     
@@ -786,6 +808,7 @@ def run_sector_rotation_app(df_global=None):
                     "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                     "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
                     "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
+                    "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
                 }
             )
         else:
@@ -801,7 +824,10 @@ def run_sector_rotation_app(df_global=None):
             st.dataframe(
                 dip_buys[display_cols],
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                column_config={
+                    "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
+                }
             )
         else:
             st.info("No dip buy setups currently")
@@ -816,7 +842,10 @@ def run_sector_rotation_app(df_global=None):
             st.dataframe(
                 faders[display_cols],
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                column_config={
+                    "Last Options Trade": st.column_config.TextColumn("Last Option", width="medium"),
+                }
             )
         else:
             st.success("✅ No concerning faders detected")
