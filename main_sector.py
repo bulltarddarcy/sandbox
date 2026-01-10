@@ -693,7 +693,7 @@ def run_sector_rotation_app(df_global=None):
 
                 # 2. NEW: Div_Price_RSI (Using Price Divergence Page logic)
                 # Defaults: Daily, 90 lookback, High/Low source, recent only (25 days)
-                div_price_rsi_label = "RSI LABEL"
+                div_price_rsi_label = ""
                 try:
                     # Prepare Data (calculate RSI if needed)
                     d_d, _ = ud.prepare_data(sdf.copy())
