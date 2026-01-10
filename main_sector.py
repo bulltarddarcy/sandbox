@@ -692,18 +692,18 @@ def run_sector_rotation_app(df_global=None):
                     div_sector_label = "📉 Bear Div"
 
                 # 2. NEW: Div_Price_RSI (Using Price Divergence Page logic)
-                # Defaults: Daily, 90 lookback, High/Low source, recent only (25 days)
+                # MODIFIED: No RSI period parameter passed, relies on existing RSI14 column
                 div_price_rsi_label = ""
                 try:
-                    # Prepare Data (calculate RSI if needed)
+                    # Prepare Data (assuming this retains RSI14)
                     d_d, _ = ud.prepare_data(sdf.copy())
                     if d_d is not None:
-                        # Scan for divergences
+                        # Scan for divergences (no calculation parameters)
                         rsi_divs = ud.find_divergences(
                             d_d, stock, 'Daily', 
                             min_n=0,
-                            periods_input=[14], # Standard RSI
-                            optimize_for='PF',
+                            # NO periods_input passed
+                            # NO optimize_for passed
                             lookback_period=90,          # Matches Max Candle Between Pivots: 90
                             price_source='High/Low',     # Matches Candle Price Methodology: High/Low
                             strict_validation=True,      # Matches Strict 50-Cross Invalidation: Yes
