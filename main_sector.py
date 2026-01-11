@@ -1,3 +1,7 @@
+{
+#type: uploaded file
+#fileName: mr-darcys-manor-main (15).zip/mr-darcys-manor-main/main_sector.py
+#fullContent:
 """
 Sector Rotation App - REFACTORED VERSION
 With multi-theme support, smart filters, and comprehensive scoring.
@@ -6,7 +10,7 @@ With multi-theme support, smart filters, and comprehensive scoring.
 import streamlit as st
 import pandas as pd
 import utils_sector as us
-import utils_darcy as ud  # [NEW] Import Darcy utils for Price Divergence Logic
+import utils_darcy as ud  # Imported for shared Divergence & DB logic
 
 # ==========================================
 # UI HELPERS
@@ -77,17 +81,6 @@ def run_sector_rotation_app(df_global=None):
     
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
-
-    # --- [NEW] PRE-PROCESS LAST TRADE DATES FROM GSHEET ---
-    last_trade_map = {}
-    if df_global is not None and not df_global.empty:
-        if "Symbol" in df_global.columns and "Trade Date" in df_global.columns:
-            try:
-                temp_df = df_global.copy()
-                temp_df["Trade Date"] = pd.to_datetime(temp_df["Trade Date"], errors='coerce')
-                last_trade_map = temp_df.groupby("Symbol")["Trade Date"].max().to_dict()
-            except Exception:
-                pass
 
     # --- 4. RRG QUADRANT GRAPHIC ---
     st.subheader("Rotation Quadrant Graphic")
@@ -196,56 +189,6 @@ def run_sector_rotation_app(df_global=None):
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- 5. MOMENTUM SCANS ---
-    with st.expander("🚀 Momentum Scans", expanded=False):
-        inc_mom, neut_mom, dec_mom = [], [], []
-        
-        for theme, ticker in theme_map.items():
-            df = etf_data_cache.get(ticker)
-            if df is None or df.empty or "RRG_Mom_Short" not in df.columns:
-                continue
-            
-            last = df.iloc[-1]
-            m5 = last.get("RRG_Mom_Short", 0)
-            m10 = last.get("RRG_Mom_Med", 0)
-            m20 = last.get("RRG_Mom_Long", 0)
-            
-            shift = m5 - m20
-            setup = us.classify_setup(df)
-            icon = setup.split()[0] if setup else ""
-            item = {"theme": theme, "shift": shift, "icon": icon}
-            
-            # Categorize
-            if m5 > m10 > m20:
-                inc_mom.append(item)
-            elif m5 < m10 < m20:
-                dec_mom.append(item)
-            else:
-                neut_mom.append(item)
-
-        # Sort by magnitude
-        inc_mom.sort(key=lambda x: x['shift'], reverse=True)
-        neut_mom.sort(key=lambda x: x['shift'], reverse=True)
-        dec_mom.sort(key=lambda x: x['shift'], reverse=False)
-
-        # Display in columns
-        m_col1, m_col2, m_col3 = st.columns(3)
-        
-        with m_col1:
-            st.success(f"📈 Increasing ({len(inc_mom)})")
-            for i in inc_mom:
-                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-        
-        with m_col2:
-            st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
-            for i in neut_mom:
-                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-        
-        with m_col3:
-            st.error(f"🔻 Decreasing ({len(dec_mom)})")
-            for i in dec_mom:
-                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-
     # --- 6. RRG CHART ---
     chart_placeholder = st.empty()
     with chart_placeholder:
@@ -267,387 +210,333 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # --- 7. SECTOR LIFECYCLE ANALYSIS ---
-    st.subheader("📊 Sector Lifecycle Dashboard")
-    
-    st.info("💡 **Where to Deploy Capital** - Sectors grouped by lifecycle stage to identify best entries, holdings to keep, and positions to exit")
+    # --- 7. SECTOR OVERVIEW ---
+    st.subheader("📊 Sector Overview")
     
     # Help section
-    col_help_theme1, col_help_theme2, col_help_theme3 = st.columns([1, 1, 1])
-    with col_help_theme1:
-        st.markdown("**🎯 Early Stage:** Fresh momentum - best new entries")
-    with col_help_theme2:
-        st.markdown("**⚖️ Established:** Mature trends - hold but don't add")
-    with col_help_theme3:
-        with st.popover("📖 How Lifecycle Works", use_container_width=True):
-            st.markdown("""
-            ### Sector Lifecycle Stages
-            
-            **🎯 Early Stage Leadership**
-            - Just entered bullish quadrants
-            - 2+ timeframes confirming
-            - Score 60+
-            → **Action:** Best time to enter new positions
-            
-            **⚖️ Established Leadership** - Strong but been leading for days
-            - High score but not fresh
-            → **Action:** Hold positions, don't chase
-            
-            **📉 Topping/Weakening**
-            - Was strong, now losing momentum
-            - 5d weaker than 20d
-            → **Action:** Take profits, exit positions
-            
-            **🚫 Weak/Lagging**
-            - Poor positioning across timeframes
-            - Low scores
-            → **Action:** Stay away, no allocation
-            """)
-            st.markdown("---")
-            if st.button("📖 View Complete Theme Guide", use_container_width=True):
-                st.session_state.show_theme_guide = True
-                st.rerun()
-    
-    # Show full theme guide if requested
-    if st.session_state.get('show_theme_guide', False):
-        with st.expander("📖 Complete Theme Scoring Guide", expanded=True):
-            if st.button("✖️ Close Theme Guide"):
-                st.session_state.show_theme_guide = False
-                st.rerun()
-            
-            try:
-                with open("THEME_SCORING_GUIDE.md", "r") as f:
-                    st.markdown(f.read())
-            except FileNotFoundError:
-                st.error("THEME_SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
-    
-    # Get lifecycle-based theme summary
-    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
-    
-    # --- EARLY STAGE: Best new entries ---
-    if categories['early_stage']:
-        st.success(f"🎯 **EARLY STAGE LEADERSHIP** ({len(categories['early_stage'])} sectors)")
-        
-        early_data = []
-        for theme_info in categories['early_stage']:
-            # Format momentum trend
-            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
-            if s5 > s10 > s20:
-                momentum_trend = f"🚀 {s5:.0f} > {s10:.0f} > {s20:.0f}"
-            else:
-                momentum_trend = f"➡️ {s5:.0f} ≈ {s10:.0f}"
-            
-            early_data.append({
-                "Sector": theme_info['theme'],
-                "Score": theme_info['consensus_score'],
-                "Grade": theme_info['grade'],
-                "Momentum Trend": momentum_trend,
-                "Stage": theme_info['freshness_detail'],
-                "5d": theme_info['tf_5d'],
-                "10d": theme_info['tf_10d'],
-                "20d": theme_info['tf_20d'],
-                "Why Selected": theme_info['reason']
-            })
-        
-        st.dataframe(
-            pd.DataFrame(early_data),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Stage": st.column_config.TextColumn("Stage", width="small"),
-                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
-            }
-        )
-        st.caption("✅ **Trading Action:** Fresh momentum building - best time to initiate new swing positions. High risk/reward.")
-        
-        with st.expander("📖 Why These Are 'Early Stage'"):
-            st.markdown("""
-            **Selection Criteria (ALL must be true):**
-            
-            1. ✅ **Fresh Entry:** Day 1-3 in current quadrant
-               - *Why:* Early = better risk/reward than chasing
-            
-            2. ✅ **Multi-Timeframe Confirmation:** 2+ timeframes bullish (Leading or Improving)
-               - *Why:* Need confirmation across timeframes for swing trades
-            
-            3. ✅ **Quality Score:** 60+ points
-               - *Why:* Filters out weak setups
-            
-            4. ✅ **Momentum Accelerating or Stable:** 5d ≥ 10d ≥ 20d scores
-               - *Why:* Want building momentum, not declining
-               - *Example:* Score trend 78 > 75 > 71 = accelerating ✓
-               - *Example:* Score trend 72 < 75 < 78 = declining ✗
-            """)
-    else:
-        st.info("🎯 **EARLY STAGE LEADERSHIP** - No sectors currently showing fresh momentum buildup")
-    
-    # --- ESTABLISHED: Hold but don't chase ---
-    if categories['established']:
-        st.info(f"⚖️ **ESTABLISHED LEADERSHIP** ({len(categories['established'])} sectors)")
-        
-        established_data = []
-        for theme_info in categories['established']:
-            # Format momentum trend
-            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
-            if s5 < s10 or s5 < s20:
-                momentum_trend = f"📉 {s5:.0f} < {s10:.0f}"
-            elif s5 > s10 > s20:
-                momentum_trend = f"🚀 {s5:.0f} > {s10:.0f} > {s20:.0f}"
-            else:
-                momentum_trend = f"➡️ {s5:.0f} ≈ {s10:.0f}"
-            
-            established_data.append({
-                "Sector": theme_info['theme'],
-                "Score": theme_info['consensus_score'],
-                "Grade": theme_info['grade'],
-                "Momentum Trend": momentum_trend,
-                "Stage": theme_info['freshness_detail'],
-                "5d": theme_info['tf_5d'],
-                "10d": theme_info['tf_10d'],
-                "20d": theme_info['tf_20d'],
-                "Why Selected": theme_info['reason']
-            })
-        
-        st.dataframe(
-            pd.DataFrame(established_data),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Stage": st.column_config.TextColumn("Stage", width="small"),
-                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
-            }
-        )
-        st.caption("⚖️ **Trading Action:** Mature uptrends - hold existing positions but avoid chasing. Look to Early Stage for new entries instead.")
-        
-        with st.expander("📖 Why These Are 'Established'"):
-            st.markdown("""
-            **Selection Criteria (ALL must be true):**
-            
-            1. ✅ **High Score:** 65+ points
-               - *Why:* Still strong positioning
-            
-            2. ✅ **Multi-Timeframe Confirmation:** 2+ timeframes bullish
-               - *Why:* Trend still intact
-            
-            3. ✅ **NOT Fresh:** Day 4+ in current quadrant
-               - *Why:* Been running for a while - late to enter
-            
-            **Note:** May show declining momentum (score 82 → 79 → 75) but still strong overall.
-            This is normal for mature trends. Hold but don't add.
-            """)
-    else:
-        st.info("⚖️ **ESTABLISHED LEADERSHIP** - No sectors in mature leadership phase")
-    
-    # --- TOPPING: Take profits ---
-    if categories['topping']:
-        st.warning(f"📉 **TOPPING / WEAKENING** ({len(categories['topping'])} sectors)")
-        
-        topping_data = []
-        for theme_info in categories['topping']:
-            # Format momentum trend
-            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
-            momentum_trend = f"📉 {s5:.0f} < {s10:.0f} or {s20:.0f}"
-            
-            topping_data.append({
-                "Sector": theme_info['theme'],
-                "Score": theme_info['consensus_score'],
-                "Grade": theme_info['grade'],
-                "Momentum Trend": momentum_trend,
-                "Stage": theme_info['freshness_detail'],
-                "5d": theme_info['tf_5d'],
-                "10d": theme_info['tf_10d'],
-                "20d": theme_info['tf_20d'],
-                "Why Selected": theme_info['reason']
-            })
-        
-        st.dataframe(
-            pd.DataFrame(topping_data),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Stage": st.column_config.TextColumn("Stage", width="small"),
-                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
-            }
-        )
-        st.caption("📉 **Trading Action:** Losing momentum - exit positions, take profits. Don't fight the rotation.")
-        
-        with st.expander("📖 Why These Are 'Topping'"):
-            st.markdown("""
-            **Selection Criteria (ANY can trigger):**
-            
-            1. ⚠️ **Momentum Declining:** 5-day score < 10-day or 20-day score
-               - *Why:* Recent momentum weaker than past = losing steam
-               - *Example:* Scores 68 < 72 < 75 = declining trend
-            
-            2. ⚠️ **5-Day Weakening:** Short-term moved to Weakening quadrant
-               - *Why:* Early warning sign of reversal
-            
-            3. ⚠️ **Mixed Signals:** Was bullish on 20d but not on 5d
-               - *Why:* Short-term turning negative
-            
-            **These are EXIT signals.** Don't wait for it to become fully weak.
-            Take profits while you still can!
-            """)
-    else:
-        st.success("✅ No sectors currently showing topping behavior")
-    
-    # --- WEAK: Avoid ---
-    if categories['weak']:
-        with st.expander(f"🚫 **WEAK / LAGGING** ({len(categories['weak'])} sectors)", expanded=False):
-            weak_data = []
-            for theme_info in categories['weak']:
-                weak_data.append({
-                    "Sector": theme_info['theme'],
-                    "Score": theme_info['consensus_score'],
-                    "Grade": theme_info['grade'],
-                    "5d": theme_info['tf_5d'],
-                    "10d": theme_info['tf_10d'],
-                    "20d": theme_info['tf_20d'],
-                    "Why Weak": theme_info['reason']
-                })
-            
-            st.dataframe(
-                pd.DataFrame(weak_data),
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Grade": st.column_config.TextColumn("Grade", width="small"),
-                    "Why Weak": st.column_config.TextColumn("Why Weak", width="large"),
-                }
-            )
-            st.caption("🚫 **Trading Action:** No allocation - stay away until lifecycle improves")
-            
-            st.markdown("""
-            **Why These Are 'Weak':**
-            - Low score (<40), OR
-            - Fewer than 2 timeframes bullish, OR
-            - All showing Lagging
-            """)
-    
-
-    st.markdown("---")
-
-    # --- 8. STOCK EXPLORER ---
-    st.subheader(f"🔎 Explorer: Theme Drilldown")
-    
-    # Search functionality
-    search_t = st.text_input(
-        "Input a ticker to find its theme(s)",
-        placeholder="NVDA..."
-    ).strip().upper()
-    
-    if search_t:
-        matches = uni_df[uni_df['Ticker'] == search_t]
-        if not matches.empty:
-            found = matches['Theme'].unique()
-            st.success(f"📍 Found **{search_t}** in: **{', '.join(found)}**")
-            if len(found) > 0:
-                st.session_state.sector_target = found[0]
-        else:
-            st.warning(f"Ticker {search_t} not found.")
-
-    # Theme selector with immediate update
-    curr_idx = all_themes.index(st.session_state.sector_target) \
-        if st.session_state.sector_target in all_themes else 0
-    
-    def update_theme():
-        st.session_state.sector_target = st.session_state.theme_selector
-    
-    new_target = st.selectbox(
-        "Select Theme to View Stocks", 
-        all_themes, 
-        index=curr_idx,
-        key="theme_selector",
-        on_change=update_theme
-    )
-
-    st.markdown("---")
-
-    # --- 9. STOCK ANALYSIS WITH SCORING HELP ---
-    st.subheader(f"📊 {st.session_state.sector_target} - Stock Analysis")
-    
-    # Help section - MORE PROMINENT
-    st.info("💡 **Stocks are ranked by comprehensive score:** Alpha Performance (40%) + Volume Confirmation (20%) + Technical Position (20%) + Theme Alignment (20%)")
-    
-    col_help1, col_help2, col_help3 = st.columns([1, 1, 1])
-    with col_help1:
-        st.markdown("**📊 Grades:** A (80+) • B (70-79) • C (60-69) • D/F (Avoid)")
+    col_help1, col_help2 = st.columns([4, 1])
     with col_help2:
-        st.markdown("**🎯 Patterns:** 🚀 Breakout • 💎 Dip Buy • ⚠️ Fading")
-    with col_help3:
-        with st.popover("📖 How Scoring Works", use_container_width=True):
+        with st.popover("📖 How Categories Work", use_container_width=True):
             st.markdown("""
-            ### Quick Reference
+            ### Understanding Momentum & Performance Categories
             
-            **Score Breakdown:**
-            - 40 pts: Alpha (beating sector?)
-            - 20 pts: Volume (institutions buying?)
-            - 20 pts: Technicals (uptrend?)
-            - 20 pts: Theme Alignment (sector strong?)
+            Sectors are categorized based on their **10-day trend direction**:
             
-            **Pattern Bonuses:**
-            - 🚀 Breakout: +10 pts
-            - 💎 Dip Buy: +5 pts
-            - 📈 Bullish Divergence: +5 pts
-            - 📉 Bearish Divergence: -10 pts
+            **⬈ Gaining Momentum & Gaining Performance**
+            - Moving up AND right on RRG chart
+            - Both speeding up AND outperforming
+            → **Best opportunity** - sector accelerating
+            
+            **⬉ Gaining Momentum & Losing Performance**
+            - Moving up but still on left side
+            - Speeding up but still underperforming
+            → **Potential reversal** - watch for breakout
+            
+            **⬊ Losing Momentum & Gaining Performance**
+            - Moving down but still on right side
+            - Slowing down but still outperforming
+            → **Topping** - take profits, avoid new entries
+            
+            **⬋ Losing Momentum & Losing Performance**
+            - Moving down AND left on RRG chart
+            - Both slowing down AND underperforming
+            → **Avoid** - sector in decline
+            
+            ---
+            
+            **5-Day Confirmation** shows if short-term trend supports the 10-day direction:
+            - "5d accelerating ahead" = Very strong ⭐⭐⭐
+            - "5d confirming trend" = Strong ⭐⭐
+            - "5d lagging behind" = Weak ⭐
             """)
-            
             st.markdown("---")
-            
-            if st.button("📖 View Complete Guide", use_container_width=True):
+            if st.button("📖 View All Possible Combinations", use_container_width=True):
                 st.session_state.show_full_guide = True
                 st.rerun()
-
-    # Show full guide if requested
+    
+    # Show full combinations guide if requested
     if st.session_state.get('show_full_guide', False):
-        with st.expander("📖 Complete Scoring & Pattern Guide", expanded=True):
+        with st.expander("📖 All 12 Possible Combinations", expanded=True):
             if st.button("✖️ Close Guide"):
                 st.session_state.show_full_guide = False
                 st.rerun()
             
-            try:
-                with open("SCORING_GUIDE.md", "r") as f:
-                    st.markdown(f.read())
-            except FileNotFoundError:
-                st.error("SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
+            st.markdown("""
+            ## Complete Category Guide
+            
+            Each of the 4 main categories can have 3 confirmation states from the 5-day window.
+            
+            ### 1. ⬈ Gaining Momentum & Gaining Performance
+            
+            **Best case - sector improving on both axes**
+            
+            - **1a. 5d accelerating ahead** ⭐⭐⭐
+              - 10d: Moving up-right
+              - 5d: Even MORE up-right
+              - **Action:** Strong buy - momentum building fast
+              - **Example:** Tech sector breaking out with volume
+            
+            - **1b. 5d confirming trend** ⭐⭐
+              - 10d: Moving up-right
+              - 5d: Also up-right, tracking 10d
+              - **Action:** Buy - steady improvement
+              - **Example:** Tech in consistent uptrend
+            
+            - **1c. 5d lagging behind** ⭐
+              - 10d: Moving up-right
+              - 5d: Behind 10d (pullback)
+              - **Action:** Caution - might be losing steam
+              - **Example:** Tech taking a breather
+            
+            ---
+            
+            ### 2. ⬉ Gaining Momentum & Losing Performance
+            
+            **Bottoming - picking up speed but still underperforming**
+            
+            - **2a. 5d accelerating ahead** 🔄⭐
+              - 10d: Moving up but left
+              - 5d: Accelerating faster
+              - **Action:** Watch closely - reversal starting
+              - **Example:** Beaten-down sector showing life
+            
+            - **2b. 5d confirming trend** 🔄
+              - 10d: Moving up but left
+              - 5d: Also moving up-left
+              - **Action:** Early reversal stage
+              - **Example:** Weak sector starting to improve
+            
+            - **2c. 5d lagging behind** 🔄
+              - 10d: Moving up but left
+              - 5d: Not keeping pace
+              - **Action:** False start - not ready
+              - **Example:** Weak sector with brief bounce
+            
+            ---
+            
+            ### 3. ⬊ Losing Momentum & Gaining Performance
+            
+            **Topping - still outperforming but slowing down**
+            
+            - **3a. 5d accelerating ahead** ⚠️
+              - 10d: Moving right but down
+              - 5d: Ahead of 10d
+              - **Action:** Possible last push up
+              - **Example:** Leader showing one more surge
+            
+            - **3b. 5d confirming trend** ⚠️⚠️
+              - 10d: Moving right but down
+              - 5d: Also moving right-down
+              - **Action:** Take profits - top is forming
+              - **Example:** Strong sector losing steam
+            
+            - **3c. 5d lagging behind** ⚠️⚠️⚠️
+              - 10d: Moving right but down
+              - 5d: Even weaker
+              - **Action:** Avoid - topping accelerating
+              - **Example:** Leader rolling over
+            
+            ---
+            
+            ### 4. ⬋ Losing Momentum & Losing Performance
+            
+            **Worst case - decline on both axes**
+            
+            - **4a. 5d accelerating ahead** ❌
+              - 10d: Moving down-left
+              - 5d: Less bad than 10d
+              - **Action:** Still avoid, but may bottom soon
+              - **Example:** Downtrend slowing
+            
+            - **4b. 5d confirming trend** ❌❌
+              - 10d: Moving down-left
+              - 5d: Also down-left
+              - **Action:** Avoid - consistent weakness
+              - **Example:** Weak sector staying weak
+            
+            - **4c. 5d lagging behind** ❌❌❌
+              - 10d: Moving down-left
+              - 5d: Even worse
+              - **Action:** Avoid strongly - accelerating lower
+              - **Example:** Sector in free fall
+            
+            ---
+            
+            ## Key Insights
+            
+            **Best Setups:**
+            - ⬈ with 5d accelerating = Strongest momentum
+            - ⬉ with 5d accelerating = Early reversal catch
+            
+            **Profit-Taking Signals:**
+            - ⬊ with any 5d = Momentum fading
+            
+            **Stay Away:**
+            - ⬋ with any 5d = Both metrics declining
+            """)
     
-    # Get theme ETF for quadrant status
-    theme_etf_ticker = theme_map.get(st.session_state.sector_target)
-    theme_df = etf_data_cache.get(theme_etf_ticker)
-    theme_quadrant = us.get_quadrant_status(theme_df, 'Short') if theme_df is not None else "N/A"
+    # Get momentum/performance categories
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
     
-    # Filter stocks for current theme
-    stock_tickers = uni_df[
-        (uni_df['Theme'] == st.session_state.sector_target) & 
-        (uni_df['Role'] == 'Stock')
-    ]['Ticker'].tolist()
+    # --- CATEGORY 1: Gaining Momentum & Gaining Performance ---
+    if categories['gaining_both']:
+        st.success(f"⬈ **GAINING MOMENTUM & GAINING PERFORMANCE** ({len(categories['gaining_both'])} sectors)")
+        
+        data = []
+        for theme_info in categories['gaining_both']:
+            data.append({
+                "Sector": theme_info['theme'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(data),
+            hide_index=True,
+            use_container_width=True
+        )
+        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building")
+    else:
+        st.info("⬈ **GAINING MOMENTUM & GAINING PERFORMANCE** - No sectors currently in this category")
     
-    if not stock_tickers:
-        st.info(f"No stocks found for {st.session_state.sector_target}")
+    # --- CATEGORY 2: Gaining Momentum & Losing Performance ---
+    if categories['gaining_mom_losing_perf']:
+        st.info(f"⬉ **GAINING MOMENTUM & LOSING PERFORMANCE** ({len(categories['gaining_mom_losing_perf'])} sectors)")
+        
+        data = []
+        for theme_info in categories['gaining_mom_losing_perf']:
+            data.append({
+                "Sector": theme_info['theme'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(data),
+            hide_index=True,
+            use_container_width=True
+        )
+        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout")
+    else:
+        st.info("⬉ **GAINING MOMENTUM & LOSING PERFORMANCE** - No sectors currently in this category")
+    
+    # --- CATEGORY 3: Losing Momentum & Gaining Performance ---
+    if categories['losing_mom_gaining_perf']:
+        st.warning(f"⬊ **LOSING MOMENTUM & GAINING PERFORMANCE** ({len(categories['losing_mom_gaining_perf'])} sectors)")
+        
+        data = []
+        for theme_info in categories['losing_mom_gaining_perf']:
+            data.append({
+                "Sector": theme_info['theme'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(data),
+            hide_index=True,
+            use_container_width=True
+        )
+        st.caption("⚠️ **Topping** - Take profits, avoid new entries")
+    else:
+        st.info("⬊ **LOSING MOMENTUM & GAINING PERFORMANCE** - No sectors currently in this category")
+    
+    # --- CATEGORY 4: Losing Momentum & Losing Performance ---
+    if categories['losing_both']:
+        st.error(f"⬋ **LOSING MOMENTUM & LOSING PERFORMANCE** ({len(categories['losing_both'])} sectors)")
+        
+        data = []
+        for theme_info in categories['losing_both']:
+            data.append({
+                "Sector": theme_info['theme'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(data),
+            hide_index=True,
+            use_container_width=True
+        )
+        st.caption("❌ **Avoid** - Sectors declining on both metrics")
+    else:
+        st.info("⬋ **LOSING MOMENTUM & LOSING PERFORMANCE** - No sectors currently in this category")
+    
+    st.markdown("---")
+    
+    st.subheader(f"📊 Stock Analysis")
+    
+    # Theme selector with "All" option (unique key)
+    all_themes = ["All"] + sorted(theme_map.keys())
+    
+    # Initialize sector_target if not exists
+    if 'sector_target' not in st.session_state:
+        st.session_state.sector_target = "All"
+    
+    selected_theme = st.selectbox(
+        "Select Theme",
+        all_themes,
+        index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
+        key="stock_theme_selector_unique"
+    )
+    
+    # Update session state
+    st.session_state.sector_target = selected_theme
+    
+    # Get momentum/performance categories for theme categorization
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    
+    # Build theme -> category mapping
+    theme_category_map = {}
+    for theme_info in categories.get('gaining_both', []):
+        theme_category_map[theme_info['theme']] = "⬈ Gaining Momentum & Gaining Performance"
+    for theme_info in categories.get('gaining_mom_losing_perf', []):
+        theme_category_map[theme_info['theme']] = "⬉ Gaining Momentum & Losing Performance"
+    for theme_info in categories.get('losing_mom_gaining_perf', []):
+        theme_category_map[theme_info['theme']] = "⬊ Losing Momentum & Gaining Performance"
+    for theme_info in categories.get('losing_both', []):
+        theme_category_map[theme_info['theme']] = "⬋ Losing Momentum & Losing Performance"
+    
+    # Filter stocks for selected theme(s)
+    if selected_theme == "All":
+        # Get all stocks and their themes
+        stock_theme_pairs = []
+        for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows():
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
+    else:
+        # Get stocks for selected theme
+        stock_theme_pairs = []
+        for _, row in uni_df[(uni_df['Theme'] == selected_theme) & (uni_df['Role'] == 'Stock')].iterrows():
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
+    
+    if not stock_theme_pairs:
+        st.info(f"No stocks found")
         return
     
-    # Build ranking data with all new features
-    ranking_data = []
+    # Build data for all stock-theme combinations
+    stock_data = []
     
-    with st.spinner(f"Analyzing {len(stock_tickers)} stocks..."):
-        for stock in stock_tickers:
+    with st.spinner(f"Loading {len(stock_theme_pairs)} stock-theme combinations..."):
+        for stock, stock_theme in stock_theme_pairs:
             sdf = etf_data_cache.get(stock)
             
-            if sdf is None or sdf.empty:
+            if sdf is None or sdf.empty or len(sdf) < 20:
                 continue
             
             try:
                 # Volume filter
-                if len(sdf) < 20:
-                    continue
-                
                 avg_vol = sdf['Volume'].tail(20).mean()
                 avg_price = sdf['Close'].tail(20).mean()
                 
@@ -656,93 +545,20 @@ def run_sector_rotation_app(df_global=None):
                 
                 last = sdf.iloc[-1]
                 
-                # Get theme-specific alpha columns
-                alpha_5d = last.get(f"Alpha_Short_{st.session_state.sector_target}", 0)
-                alpha_10d = last.get(f"Alpha_Med_{st.session_state.sector_target}", 0)
-                alpha_20d = last.get(f"Alpha_Long_{st.session_state.sector_target}", 0)
-                beta = last.get(f"Beta_{st.session_state.sector_target}", 1.0)
+                # Get theme-specific metrics
+                alpha_5d = last.get(f"Alpha_Short_{stock_theme}", 0)
+                alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
+                alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
+                beta = last.get(f"Beta_{stock_theme}", 1.0)
                 
-                # Pattern detection
-                breakout = us.detect_breakout_candidates(sdf, st.session_state.sector_target)
-                dip_buy = us.detect_dip_buy_candidates(sdf, st.session_state.sector_target)
-                fading = us.detect_fading_candidates(sdf, st.session_state.sector_target)
-                divergence = us.detect_relative_strength_divergence(sdf, st.session_state.sector_target)
-                
-                # Comprehensive score
-                score_data = us.calculate_comprehensive_stock_score(
-                    sdf,
-                    st.session_state.sector_target,
-                    theme_quadrant
-                )
-                
-                # Determine pattern label
-                pattern = ""
-                if breakout:
-                    pattern = f"🚀 Breakout ({breakout['strength']:.0f})"
-                elif dip_buy:
-                    pattern = "💎 Dip Buy"
-                elif fading:
-                    pattern = "⚠️ Fading"
-                
-                # 1. RENAME: Div_Sector (was Divergence)
-                div_sector_label = ""
-                if divergence == 'bullish_divergence':
-                    div_sector_label = "📈 Bull Div"
-                elif divergence == 'bearish_divergence':
-                    div_sector_label = "📉 Bear Div"
+                # --- NEW COLUMNS: DIVERGENCE & LAST TRADE ---
+                div_sig = ud.get_latest_divergence_signal(sdf, stock)
+                last_trade_date, is_recent_trade = ud.get_last_trade_info(df_global, stock)
 
-                # 2. NEW: Div_Price_RSI (Using Price Divergence Logic)
-                div_price_rsi_label = ""
-                try:
-                    # COPY so we don't mess up the cache
-                    calc_df = sdf.copy()
-                    
-                    # --- [FIX 1] RESET INDEX ---
-                    # utils_darcy.prepare_data fails if Date is the index. We must make it a column.
-                    if isinstance(calc_df.index, pd.DatetimeIndex):
-                        calc_df = calc_df.reset_index()
-                    
-                    # --- [FIX 2] STANDARDIZE COLUMNS ---
-                    # Ensure everything is UPPERCASE so we can find 'CLOSE', 'DATE', etc.
-                    calc_df.columns = [str(c).strip().upper() for c in calc_df.columns]
-
-                    # --- [FIX 3] MAP RSI14 -> RSI_14 ---
-                    # Map your pre-calculated column so utils_darcy finds it
-                    if "RSI14" in calc_df.columns:
-                        calc_df["RSI_14"] = calc_df["RSI14"]
-
-                    # Prepare Data (Now safe because Date is a column)
-                    d_d, _ = ud.prepare_data(calc_df)
-                    
-                    if d_d is not None:
-                        # Scan for divergences
-                        rsi_divs = ud.find_divergences(
-                            d_d, stock, 'Daily', 
-                            min_n=0,
-                            lookback_period=90,          
-                            price_source='Close', # Safer to use Close in case High/Low are imperfect
-                            strict_validation=True,      
-                            recent_days_filter=25,       
-                            rsi_diff_threshold=2.0       
-                        )
-                        if rsi_divs:
-                            latest_sig = rsi_divs[-1]
-                            icon = "🟢" if latest_sig['Type'] == 'Bullish' else "🔴"
-                            div_price_rsi_label = f"{icon} {latest_sig['Type']} ({latest_sig['RSI_Display']})"
-                except Exception:
-                    pass
-                
-                # 3. RENAME: Last Option Trade (was Last Options Trade)
-                last_trade_val = last_trade_map.get(stock)
-                if pd.notna(last_trade_val):
-                    last_trade_str = last_trade_val.strftime("%Y-%m-%d")
-                else:
-                    last_trade_str = "None"
-
-                ranking_data.append({
+                stock_data.append({
                     "Ticker": stock,
-                    "Score": score_data['total_score'] if score_data else 0,
-                    "Grade": score_data['grade'] if score_data else 'F',
+                    "Theme": stock_theme,
+                    "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
                     "Price": last['Close'],
                     "Beta": beta,
                     "Alpha 5d": alpha_5d,
@@ -751,140 +567,283 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "Pattern": pattern,
-                    
-                    "Div_Sector": div_sector_label,       # RENAMED
-                    "Div_Price_RSI": div_price_rsi_label, # NEW
-                    "Last Option Trade": last_trade_str,  # RENAMED
-                    
+                    "RSI Price Div": div_sig,
+                    "Last JB Trade": last_trade_date,
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
                     "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
-                    # Hidden columns for filtering
-                    "_breakout": breakout is not None,
-                    "_dip_buy": dip_buy,
-                    "_fading": fading
+                    "_is_recent_trade": is_recent_trade, # Hidden col for styling
                 })
                 
             except Exception as e:
-                # st.error(f"Error processing {stock}: {e}")
                 continue
 
-    if not ranking_data:
-        st.info(f"No stocks found for {st.session_state.sector_target} (or filtered by volume).")
+    if not stock_data:
+        st.info(f"No stocks found (or filtered by volume).")
         return
     
-    df_ranked = pd.DataFrame(ranking_data).sort_values(by='Score', ascending=False)
+    df_stocks = pd.DataFrame(stock_data)
     
-    # --- 10. TABBED DISPLAY WITH SMART FILTERS ---
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🎯 All Stocks",
-        "🚀 Breakouts",
-        "💎 Dip Buys",
-        "⚠️ Faders"
-    ])
+    # --- FILTER BUILDER ---
+    st.markdown("### 🔍 Custom Filters")
+    st.caption("Build up to 5 filters. Filters apply automatically as you change them.")
     
-    # Display columns (excluding hidden filter columns)
-    display_cols = [c for c in df_ranked.columns if not c.startswith('_')]
+    # Filterable columns (numeric and categorical)
+    numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    categorical_columns = ["Theme", "Theme Category", "RSI Price Div", "Last JB Trade"]
+    all_filter_columns = numeric_columns + categorical_columns
     
-    # Helper for consistent column config
-    def get_column_config():
-        return {
-            "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-            "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-            "Grade": st.column_config.TextColumn("Grade", width="small"),
-            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-            "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
-            "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-            "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
-            "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
-            "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
-            "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
-            "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
-            # UPDATED COLUMNS CONFIG
-            "Div_Sector": st.column_config.TextColumn("Div (Sector)", width="small"),
-            "Div_Price_RSI": st.column_config.TextColumn("Div (RSI)", width="medium"),
-            "Last Option Trade": st.column_config.TextColumn("Last Option", width="medium"),
-        }
+    # Get unique values for categorical columns
+    unique_themes = sorted(df_stocks['Theme'].unique().tolist())
+    unique_categories = sorted(df_stocks['Theme Category'].unique().tolist())
+    
+    # Create 5 filter rows (always visible)
+    filters = []
+    
+    for i in range(5):
+        cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
+        
+        with cols[0]:
+            column = st.selectbox(
+                f"Filter {i+1} Column",
+                [None] + all_filter_columns,
+                key=f"filter_{i}_column",
+                label_visibility="collapsed",
+                placeholder="Select column..."
+            )
+        
+        # Determine if column is numeric or categorical
+        is_numeric = column in numeric_columns
+        is_categorical = column in categorical_columns
+        
+        if is_numeric:
+            with cols[1]:
+                operator = st.selectbox(
+                    "Operator",
+                    [">=", "<="],
+                    key=f"filter_{i}_operator",
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[2]:
+                value_type = st.radio(
+                    "Type",
+                    ["Number", "Column"],
+                    key=f"filter_{i}_type",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[3]:
+                if value_type == "Number":
+                    value = st.number_input(
+                        "Value",
+                        value=0.0,
+                        step=0.1,
+                        format="%.2f",
+                        key=f"filter_{i}_value",
+                        label_visibility="collapsed",
+                        disabled=column is None
+                    )
+                    value_column = None
+                    value_categorical = None
+                else:  # Column
+                    value_column = st.selectbox(
+                        "Compare to",
+                        numeric_columns,
+                        key=f"filter_{i}_value_column",
+                        label_visibility="collapsed",
+                        disabled=column is None
+                    )
+                    value = None
+                    value_categorical = None
+        
+        elif is_categorical:
+            # For categorical columns, show = operator and dropdown
+            with cols[1]:
+                operator = st.selectbox(
+                    "Operator",
+                    ["="],
+                    key=f"filter_{i}_operator_cat",
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[2]:
+                st.write("")  # Placeholder
+            
+            with cols[3]:
+                if column == "Theme":
+                    value_categorical = st.selectbox(
+                        "Select Theme",
+                        unique_themes,
+                        key=f"filter_{i}_value_theme",
+                        label_visibility="collapsed"
+                    )
+                elif column == "Theme Category":
+                    value_categorical = st.selectbox(
+                        "Select Category",
+                        unique_categories,
+                        key=f"filter_{i}_value_category",
+                        label_visibility="collapsed"
+                    )
+                elif column in ["RSI Price Div", "Last JB Trade"]:
+                    # Get dynamic unique values for these new columns
+                    unique_vals = sorted([str(x) for x in df_stocks[column].dropna().unique().tolist()])
+                    value_categorical = st.selectbox(
+                        f"Select {column}",
+                        unique_vals,
+                        key=f"filter_{i}_value_dynamic",
+                        label_visibility="collapsed"
+                    )
+                else:
+                    value_categorical = None
+                
+                value = None
+                value_column = None
+                value_type = "Categorical"
+        
+        else:
+            # No column selected
+            with cols[1]:
+                st.write("")
+            with cols[2]:
+                st.write("")
+            with cols[3]:
+                st.write("")
+            operator = None
+            value = None
+            value_column = None
+            value_categorical = None
+            value_type = None
+        
+        with cols[4]:
+            # Logic connector (except for last filter)
+            if i < 4 and column is not None:
+                logic = st.radio(
+                    "Logic",
+                    ["AND", "OR"],
+                    key=f"filter_{i}_logic",
+                    horizontal=True,
+                    label_visibility="collapsed"
+                )
+            else:
+                logic = None
+        
+        # Store filter config (only if column is selected)
+        if column is not None:
+            filters.append({
+                'column': column,
+                'operator': operator,
+                'value_type': value_type,
+                'value': value,
+                'value_column': value_column,
+                'value_categorical': value_categorical,
+                'logic': logic
+            })
+    
+    # Clear filters button
+    if st.button("🗑️ Clear All Filters"):
+        st.rerun()
+    
+    # Apply filters automatically
+    df_filtered = df_stocks.copy()
+    
+    if filters:
+        # Build filter conditions
+        conditions = []
+        
+        for f in filters:
+            col = f['column']
+            op = f['operator']
+            
+            if f['value_type'] == 'Number':
+                val = f['value']
+                if op == '>=':
+                    condition = df_filtered[col] >= val
+                else:  # <=
+                    condition = df_filtered[col] <= val
+            elif f['value_type'] == 'Column':
+                val_col = f['value_column']
+                if op == '>=':
+                    condition = df_filtered[col] >= df_filtered[val_col]
+                else:  # <=
+                    condition = df_filtered[col] <= df_filtered[val_col]
+            elif f['value_type'] == 'Categorical':
+                # Categorical comparison
+                val_cat = f['value_categorical']
+                condition = df_filtered[col] == val_cat
+            else:
+                continue
+            
+            conditions.append(condition)
+        
+        # Combine conditions with AND/OR logic
+        if len(conditions) == 1:
+            final_condition = conditions[0]
+        elif len(conditions) > 1:
+            final_condition = conditions[0]
+            for i in range(1, len(conditions)):
+                logic = filters[i-1].get('logic', 'AND')
+                if logic == 'AND':
+                    final_condition = final_condition & conditions[i]
+                else:  # OR
+                    final_condition = final_condition | conditions[i]
+            
+            df_filtered = df_filtered[final_condition]
+    
+    # Display results
+    st.markdown("---")
+    st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
+    
+    # Column configuration
+    column_config = {
+        "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "Theme": st.column_config.TextColumn("Theme", width="medium"),
+        "Theme Category": st.column_config.TextColumn("Theme Category", width="medium"),
+        "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+        "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+        "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
+        "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
+        "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
+        "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
+        "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
+        "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
+        "RSI Price Div": st.column_config.TextColumn("RSI Price Div", width="medium"),
+        "Last JB Trade": st.column_config.TextColumn("Last JB Trade", width="medium"),
+        "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
+        "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
+        "50 MA": st.column_config.TextColumn("50 MA", width="small"),
+        "200 MA": st.column_config.TextColumn("200 MA", width="small"),
+        "_is_recent_trade": st.column_config.Column("_is_recent_trade", hidden=True),
+    }
 
-    with tab1:
-        st.caption(f"Showing {len(df_ranked)} stocks sorted by comprehensive score")
-        
-        # Highlight function
-        def highlight_top_scores(row):
-            styles = pd.Series('', index=row.index)
-            score = row.get('Score', 0)
-            
-            if score >= 80:
-                styles['Score'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
-                styles['Grade'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
-            elif score >= 70:
-                styles['Score'] = 'background-color: #cce5ff; color: #004085;'
-                styles['Grade'] = 'background-color: #cce5ff; color: #004085;'
-            
-            # Highlight alpha columns
-            for col in ['Alpha 5d', 'Alpha 10d', 'Alpha 20d']:
-                if col in row.index:
-                    alpha = row[col]
-                    if alpha > 2.0:
-                        styles[col] = 'background-color: #d4edda; color: #155724;'
-                    elif alpha < -2.0:
-                        styles[col] = 'background-color: #f8d7da; color: #721c24;'
-            
-            return styles
-        
-        st.dataframe(
-            df_ranked[display_cols].style.apply(highlight_top_scores, axis=1),
-            hide_index=True,
-            use_container_width=True,
-            column_config=get_column_config()
-        )
+    # Style function for Last Trade Highlight
+    def highlight_recent_trade(row):
+        styles = [''] * len(row)
+        if row.get('_is_recent_trade', False):
+             # Find index of the column
+             try:
+                 idx = row.index.get_loc('Last JB Trade')
+                 styles[idx] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
+             except: pass
+        return styles
     
-    with tab2:
-        breakouts = df_ranked[df_ranked['_breakout'] == True]
-        
-        if not breakouts.empty:
-            st.success(f"🚀 Found {len(breakouts)} breakout candidates")
-            st.caption("Stocks transitioning from underperformance to outperformance with volume confirmation")
-            
-            st.dataframe(
-                breakouts[display_cols],
-                hide_index=True,
-                use_container_width=True,
-                column_config=get_column_config()
-            )
-        else:
-            st.info("No breakout patterns detected currently")
-    
-    with tab3:
-        dip_buys = df_ranked[df_ranked['_dip_buy'] == True]
-        
-        if not dip_buys.empty:
-            st.success(f"💎 Found {len(dip_buys)} dip buy opportunities")
-            st.caption("Stocks that were outperforming but pulled back to average - potential buy-the-dip setups")
-            
-            st.dataframe(
-                dip_buys[display_cols],
-                hide_index=True,
-                use_container_width=True,
-                column_config=get_column_config()
-            )
-        else:
-            st.info("No dip buy setups currently")
-    
-    with tab4:
-        faders = df_ranked[df_ranked['_fading'] == True]
-        
-        if not faders.empty:
-            st.warning(f"⚠️ {len(faders)} stocks showing weakness")
-            st.caption("Stocks that were very strong but alpha is declining - consider taking profits")
-            
-            st.dataframe(
-                faders[display_cols],
-                hide_index=True,
-                use_container_width=True,
-                column_config=get_column_config()
-            )
-        else:
-            st.success("✅ No concerning faders detected")
+    st.dataframe(
+        df_filtered.style.apply(highlight_recent_trade, axis=1),
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config,
+        column_order=[
+            "Ticker", "Theme", "Theme Category", "Price", 
+            "Alpha 5d", "Alpha 10d", "Alpha 20d", 
+            "RVOL 5d", "RVOL 10d", "RVOL 20d",
+            "RSI Price Div", "Last JB Trade",
+            "8 EMA", "21 EMA", "50 MA", "200 MA"
+        ]
+    )
+
+}
