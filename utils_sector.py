@@ -527,141 +527,6 @@ def detect_relative_strength_divergence(
     
     return None
 
-def calculate_comprehensive_stock_score(
-    df: pd.DataFrame, 
-    theme_suffix: str, 
-    theme_quadrant: str
-) -> Optional[Dict]:
-    """
-    Multi-factor scoring system for stock selection.
-    
-    Factors:
-    1. Alpha trajectory (40%)
-    2. Volume confirmation (20%)
-    3. Technical position (20%)
-    4. Theme alignment (20%)
-    
-    Args:
-        df: Stock dataframe
-        theme_suffix: Theme name
-        theme_quadrant: Current quadrant of theme (e.g., "🟢 Leading")
-        
-    Returns:
-        Dict with score and breakdown
-    """
-    if df is None or df.empty:
-        return None
-    
-    try:
-        last = df.iloc[-1]
-        score_breakdown = {}
-        
-        # --- FACTOR 1: Alpha Trajectory (40 points) ---
-        alpha_5d = last.get(f"Alpha_Short_{theme_suffix}", 0)
-        alpha_10d = last.get(f"Alpha_Med_{theme_suffix}", 0)
-        alpha_20d = last.get(f"Alpha_Long_{theme_suffix}", 0)
-        
-        # Consistency (15 points)
-        if alpha_5d > 0 and alpha_10d > 0 and alpha_20d > 0:
-            score_breakdown['alpha_consistency'] = 15
-        elif alpha_5d > 0 and alpha_10d > 0:
-            score_breakdown['alpha_consistency'] = 10
-        elif alpha_5d > 0:
-            score_breakdown['alpha_consistency'] = 5
-        else:
-            score_breakdown['alpha_consistency'] = 0
-        
-        # Acceleration (15 points)
-        if alpha_5d > alpha_10d > alpha_20d:
-            score_breakdown['alpha_acceleration'] = 15
-        elif alpha_5d > alpha_10d:
-            score_breakdown['alpha_acceleration'] = 10
-        elif alpha_5d > alpha_20d:
-            score_breakdown['alpha_acceleration'] = 5
-        else:
-            score_breakdown['alpha_acceleration'] = 0
-        
-        # Magnitude (10 points)
-        max_alpha = max(alpha_5d, alpha_10d, alpha_20d)
-        if max_alpha > 5.0:
-            score_breakdown['alpha_magnitude'] = 10
-        elif max_alpha > 2.0:
-            score_breakdown['alpha_magnitude'] = 7
-        elif max_alpha > 1.0:
-            score_breakdown['alpha_magnitude'] = 4
-        else:
-            score_breakdown['alpha_magnitude'] = 0
-        
-        # --- FACTOR 2: Volume Confirmation (20 points) ---
-        rvol_5d = last.get('RVOL_Short', 0)
-        rvol_10d = last.get('RVOL_Med', 0)
-        
-        if rvol_5d > 1.5:
-            score_breakdown['volume'] = 20
-        elif rvol_5d > 1.2:
-            score_breakdown['volume'] = 15
-        elif rvol_10d > 1.2:
-            score_breakdown['volume'] = 10
-        else:
-            score_breakdown['volume'] = 0
-        
-        # --- FACTOR 3: Technical Position (20 points) ---
-        price = last.get('Close', 0)
-        ema8 = last.get('Ema8', 0)
-        ema21 = last.get('Ema21', 0)
-        sma50 = last.get('Sma50', 0)
-        sma200 = last.get('Sma200', 0)
-        
-        ma_score = 0
-        if price > ema8 and ema8 > 0: ma_score += 5
-        if price > ema21 and ema21 > 0: ma_score += 5
-        if price > sma50 and sma50 > 0: ma_score += 5
-        if price > sma200 and sma200 > 0: ma_score += 5
-        
-        score_breakdown['technical'] = ma_score
-        
-        # --- FACTOR 4: Theme Alignment (20 points) ---
-        if "Leading" in theme_quadrant:
-            score_breakdown['theme_sync'] = 20 if alpha_5d > 1.0 else (10 if alpha_5d > 0 else 0)
-        elif "Improving" in theme_quadrant:
-            score_breakdown['theme_sync'] = 20 if alpha_5d > alpha_20d else 5
-        elif "Weakening" in theme_quadrant:
-            score_breakdown['theme_sync'] = 0 if alpha_5d < 0 else 10
-        else:  # Lagging
-            score_breakdown['theme_sync'] = 0
-        
-        # --- CALCULATE TOTAL ---
-        total_score = sum(score_breakdown.values())
-        
-        # Pattern bonuses
-        if detect_breakout_candidates(df, theme_suffix):
-            score_breakdown['pattern_bonus'] = 10
-            total_score += 10
-        
-        if detect_dip_buy_candidates(df, theme_suffix):
-            score_breakdown['dip_buy_bonus'] = 5
-            total_score += 5
-        
-        divergence = detect_relative_strength_divergence(df, theme_suffix)
-        if divergence == 'bullish_divergence':
-            score_breakdown['divergence_bonus'] = 5
-            total_score += 5
-        elif divergence == 'bearish_divergence':
-            score_breakdown['divergence_penalty'] = -10
-            total_score -= 10
-        
-        # Cap score at 0-100
-        total_score = min(100, max(0, total_score))
-        
-        return {
-            'total_score': total_score,
-            'breakdown': score_breakdown,
-            'grade': _score_to_grade(total_score)
-        }
-    except Exception as e:
-        logger.error(f"Error calculating score: {e}")
-        return None
-
 def _score_to_grade(score: float) -> str:
     """Convert numeric score to letter grade."""
     if score >= 80: return 'A'
@@ -670,10 +535,316 @@ def _score_to_grade(score: float) -> str:
     if score >= 50: return 'D'
     return 'F'
 
-# ==========================================
-# 6. THEME SCORING & ANALYSIS
-# ==========================================
-
+def calculate_comprehensive_stock_score(
+    df: pd.DataFrame, 
+    theme_suffix: str, 
+    theme_quadrant: str,
+    sector_score: float = 70,
+    sector_stage: str = "Established"
+) -> Optional[Dict]:
+    """
+    EARLY ENTRY FOCUSED scoring system for stock selection.
+    
+    GOAL: Catch rotation INTO stocks, not highlight leaders already extended.
+    
+    Factors:
+    1. Setup Quality (40%) - Is this at an inflection point?
+    2. Entry Timing (30%) - Is NOW the right time to enter?
+    3. Risk/Reward (20%) - How much upside potential?
+    4. Sector Context (10%) - Is sector at right stage?
+    
+    PHILOSOPHY:
+    - High scores = Early inflection points (0-3% alpha, just turning)
+    - Low scores = Already extended (5%+ alpha, too late)
+    - Base scoring + bonuses (not all-or-nothing)
+    
+    Args:
+        df: Stock dataframe
+        theme_suffix: Theme name
+        theme_quadrant: Current quadrant of theme
+        sector_score: Theme consensus score
+        sector_stage: Lifecycle stage (Early/Established/Topping/Weak)
+        
+    Returns:
+        Dict with score, breakdown, grade, and category label
+    """
+    if df is None or df.empty or len(df) < 20:
+        return None
+    
+    try:
+        last = df.iloc[-1]
+        score_breakdown = {}
+        
+        # Get alpha values
+        alpha_5d = last.get(f"Alpha_Short_{theme_suffix}", 0)
+        alpha_10d = last.get(f"Alpha_Med_{theme_suffix}", 0)
+        alpha_20d = last.get(f"Alpha_Long_{theme_suffix}", 0)
+        
+        # Get price and volume data
+        price = last.get('Close', 0)
+        ema8 = last.get('Ema8', 0)
+        ema21 = last.get('Ema21', 0)
+        sma50 = last.get('Sma50', 0)
+        sma200 = last.get('Sma200', 0)
+        rvol_5d = last.get('RVOL_Short', 0)
+        rvol_10d = last.get('RVOL_Med', 0)
+        rvol_20d = last.get('RVOL_Long', 0)
+        
+        # Calculate days positive (cumulative in last 20)
+        days_positive = 0
+        for i in range(min(20, len(df))):
+            row_alpha = df.iloc[-(i+1)].get(f"Alpha_Short_{theme_suffix}", 0)
+            if row_alpha > 0:
+                days_positive += 1
+        
+        # --- FACTOR 1: Setup Quality (40 points) ---
+        setup_score = 0
+        setup_reason = ""
+        
+        # BASE SCORING: Give points for being positive in decent sector
+        if alpha_5d > 0 and sector_score >= 60:
+            setup_score += 12
+            setup_reason = "Positive in decent sector"
+        elif alpha_5d > 0:
+            setup_score += 8
+            setup_reason = "Positive alpha"
+        
+        # BONUS 1: Fresh Entry Range (0-3% alpha) = +15 points
+        if 0 <= alpha_5d <= 3.0:
+            setup_score += 15
+            setup_reason = "Fresh entry range (0-3% alpha)"
+            
+            # Extra bonus if also fresh on days
+            if days_positive <= 7:
+                setup_score += 5
+                setup_reason += ", very fresh (≤7 days)"
+        
+        # BONUS 2: Improving Trend (alpha accelerating) = +10 points
+        if alpha_5d > alpha_10d and alpha_10d > alpha_20d:
+            setup_score += 10
+            setup_reason += ", accelerating"
+        elif alpha_5d > alpha_20d:
+            setup_score += 6
+            setup_reason += ", improving"
+        
+        # PENALTY: Extended (>5% alpha OR high alpha + mature) = -15 points
+        if alpha_5d > 5.0:
+            setup_score -= 15
+            setup_reason = "Extended (>5% alpha)"
+        elif alpha_5d > 3.5 and days_positive >= 15:
+            setup_score -= 10
+            setup_reason = "Extended (mature + high alpha)"
+        
+        score_breakdown['setup_quality'] = max(0, min(40, setup_score))
+        score_breakdown['setup_reason'] = setup_reason
+        
+        # --- FACTOR 2: Entry Timing (30 points) ---
+        timing_score = 0
+        timing_reason = ""
+        
+        # Part A: Price Position (15 points)
+        if ema21 > 0:
+            dist_from_ema21 = (price - ema21) / ema21
+        else:
+            dist_from_ema21 = 999
+        
+        if sma50 > 0:
+            dist_from_sma50 = (price - sma50) / sma50
+        else:
+            dist_from_sma50 = 999
+        
+        # BASE: Give some points for reasonable position
+        if price > sma200 and sma200 > 0:
+            timing_score += 5
+            timing_reason = "Above 200 MA"
+        
+        # BONUS: Near support = +10 points
+        if abs(dist_from_ema21) <= 0.03 and price > sma200 and sma200 > 0:
+            timing_score += 10
+            timing_reason = "At support (21 EMA)"
+        # BONUS: Fresh breakout = +10 points
+        elif 0 < dist_from_sma50 <= 0.08 and rvol_5d >= 1.2:
+            timing_score += 10
+            timing_reason = "Fresh breakout"
+        # OK: Neutral zone = +5 points
+        elif -0.05 <= dist_from_ema21 <= 0.08:
+            timing_score += 5
+            timing_reason = "Neutral zone"
+        # PENALTY: Extended from entry = -10 points
+        elif dist_from_ema21 > 0.12 or dist_from_sma50 > 0.18:
+            timing_score -= 10
+            timing_reason = "Extended from entry"
+        
+        score_breakdown['timing_price'] = timing_score
+        
+        # Part B: Volume Pattern (15 points) - LOWERED THRESHOLDS
+        volume_score = 0
+        volume_reason = ""
+        
+        # BASE: Give points for any reasonable volume
+        if rvol_5d >= 1.3:
+            volume_score += 15
+            volume_reason = "Strong volume (1.3x+)"
+        elif rvol_5d >= 1.0:
+            volume_score += 12
+            volume_reason = "Steady volume (1.0-1.3x)"
+        elif rvol_5d >= 0.85:
+            volume_score += 8
+            volume_reason = "Acceptable volume (0.85x+)"
+        else:
+            volume_score += 3
+            volume_reason = "Weak volume (<0.85x)"
+        
+        # BONUS: Volume building (accelerating) = +3 points
+        if rvol_5d > rvol_10d > rvol_20d:
+            volume_score += 3
+            volume_reason += ", building"
+        
+        score_breakdown['timing_volume'] = min(15, volume_score)
+        score_breakdown['timing_reason'] = timing_reason + "; " + volume_reason
+        
+        # --- FACTOR 3: Risk/Reward (20 points) ---
+        rr_score = 0
+        rr_reason = ""
+        
+        # Part A: Upside Potential (15 points)
+        sector_implied_alpha = 3.5 if sector_score >= 80 else (2.5 if sector_score >= 70 else 1.5)
+        upside_gap = sector_implied_alpha - alpha_5d
+        
+        # BASE: Give points for being in strong sector
+        if sector_score >= 70:
+            rr_score += 5
+        
+        # BONUS: High catch-up potential
+        if upside_gap >= 2.5 and sector_score >= 70:
+            rr_score += 10
+            rr_reason = f"High upside ({upside_gap:.1f}% room)"
+        elif upside_gap >= 0.5:
+            rr_score += 7
+            rr_reason = "Moderate upside"
+        elif upside_gap >= -1.0:
+            rr_score += 4
+            rr_reason = "Limited upside"
+        else:
+            rr_reason = "Already ahead of sector"
+        
+        # Part B: Downside Protection (5 points)
+        if price > sma50 > sma200 and sma50 > 0 and sma200 > 0:
+            rr_score += 5
+        elif price > sma200 and sma200 > 0:
+            rr_score += 3
+        
+        score_breakdown['risk_reward'] = min(20, rr_score)
+        score_breakdown['rr_reason'] = rr_reason
+        
+        # --- FACTOR 4: Sector Context (10 points) ---
+        context_score = 0
+        context_reason = ""
+        
+        if sector_stage == "Early" and sector_score >= 70:
+            context_score += 10
+            context_reason = "Perfect: Early stage sector"
+        elif sector_stage == "Established" and sector_score >= 65:
+            context_score += 7
+            context_reason = "Good: Established sector"
+        elif sector_stage == "Established" and sector_score >= 55:
+            context_score += 4
+            context_reason = "OK: Mature sector"
+        elif sector_stage == "Topping" or sector_score < 50:
+            context_score -= 10
+            context_reason = "Wrong sector: Topping/weak"
+        
+        score_breakdown['sector_context'] = context_score
+        score_breakdown['context_reason'] = context_reason
+        
+        # --- CALCULATE BASE TOTAL ---
+        total_score = (score_breakdown['setup_quality'] + 
+                      score_breakdown['timing_price'] + 
+                      score_breakdown['timing_volume'] +
+                      score_breakdown['risk_reward'] + 
+                      score_breakdown['sector_context'])
+        
+        # --- PATTERN BONUSES/PENALTIES (Partial Credit) ---
+        pattern_label = ""
+        pattern_score = 0
+        
+        # FRESH BREAKOUT PATTERN: Check 4 criteria, give partial credit
+        fb_matches = 0
+        if -2.5 <= alpha_20d <= 0.5: fb_matches += 1
+        if 0 <= alpha_5d <= 3.0: fb_matches += 1
+        if rvol_5d >= 1.2: fb_matches += 1
+        if days_positive <= 8: fb_matches += 1
+        
+        if fb_matches >= 3:
+            pattern_score = 10 if fb_matches == 4 else 7
+            pattern_label = "🚀 Fresh Breakout"
+            score_breakdown['pattern_bonus'] = pattern_score
+        
+        # DIP BUY PATTERN: Check 3 criteria, partial credit
+        elif alpha_20d >= 2.5 and -0.5 <= alpha_5d <= 2.0:
+            db_matches = 1  # Already know alpha criteria match
+            if price > ema21 and ema21 > 0: db_matches += 1
+            if abs(dist_from_ema21) <= 0.05: db_matches += 1
+            
+            if db_matches >= 2:
+                pattern_score = 8 if db_matches == 3 else 5
+                pattern_label = "💎 Dip Buy"
+                score_breakdown['pattern_bonus'] = pattern_score
+        
+        # SECTOR ROTATION: Early sector + turning positive
+        elif (sector_stage == "Early" and 
+              -1.5 <= alpha_20d <= 2.0 and 
+              0.5 <= alpha_5d <= 4.0):
+            pattern_score = 12
+            pattern_label = "🎯 Sector Rotation"
+            score_breakdown['pattern_bonus'] = pattern_score
+        
+        # EXTENDED WARNING: -12 PENALTY (less harsh than -15)
+        extended_count = 0
+        if alpha_5d > 5.0: extended_count += 1
+        if alpha_5d > 3.5 and days_positive >= 13: extended_count += 1
+        if dist_from_ema21 > 0.12: extended_count += 1
+        
+        if extended_count >= 2:
+            pattern_score = -12
+            pattern_label = "⚡ Extended"
+            score_breakdown['extended_penalty'] = pattern_score
+        
+        # BEARISH DIVERGENCE: -8 PENALTY
+        divergence = detect_relative_strength_divergence(df, theme_suffix)
+        if divergence == 'bearish_divergence':
+            pattern_score -= 8
+            pattern_label = pattern_label + " + 📉" if pattern_label else "📉 Bear Div"
+            score_breakdown['divergence_penalty'] = -8
+        
+        total_score += pattern_score
+        
+        # Cap score at 0-100
+        total_score = min(100, max(0, total_score))
+        
+        # Determine category label
+        if total_score >= 75 and alpha_5d <= 3.5 and days_positive <= 12:
+            category = "🎯 Optimal Entry"
+        elif total_score >= 70 and alpha_20d >= 3.0 and alpha_5d <= 2.0:
+            category = "💎 Pullback Buy"
+        elif total_score >= 75 and alpha_5d > 4.0:
+            category = "⚖️ Established Winner"
+        elif total_score >= 60:
+            category = "⚖️ Selective"
+        else:
+            category = "⚠️ Caution"
+        
+        return {
+            'total_score': total_score,
+            'breakdown': score_breakdown,
+            'grade': _score_to_grade(total_score),
+            'category': category,
+            'pattern_label': pattern_label,
+            'days_positive': days_positive
+        }
+    except Exception as e:
+        logger.error(f"Error calculating stock score: {e}")
+        return None
 def calculate_theme_score(df: pd.DataFrame, view_key: str = 'Short') -> Optional[Dict]:
     """
     Calculate comprehensive score for a theme/sector (0-100 with grade).
@@ -986,171 +1157,156 @@ def calculate_consensus_theme_score(
         logger.error(f"Error calculating consensus score: {e}")
         return None
 
-def get_actionable_theme_summary(
+def get_momentum_performance_categories(
     etf_data_cache: Dict,
     theme_map: Dict
 ) -> Dict[str, List[Dict]]:
     """
-    Group themes by lifecycle stage using momentum trends and score quality.
+    Categorize themes by momentum and performance direction.
     
-    Categorization Logic (in plain English):
+    Categories based on 10-day trend direction:
+    1. Gaining Momentum & Gaining Performance (⬈) - Best
+    2. Gaining Momentum & Losing Performance (⬉) - Bottoming
+    3. Losing Momentum & Gaining Performance (⬊) - Topping
+    4. Losing Momentum & Losing Performance (⬋) - Worst
     
-    EARLY STAGE (Best new entries):
-    - Fresh position (Day 1-3 in current quadrant)
-    - 2+ timeframes bullish (Leading or Improving)
-    - Score 60+ (decent quality)
-    - Momentum accelerating (5d > 10d > 20d) OR at least stable
-    
-    ESTABLISHED (Hold but don't chase):
-    - NOT fresh (Day 4+)
-    - High score (65+)
-    - 2+ timeframes bullish
-    - Even if momentum stable/declining - it's mature
-    
-    TOPPING (Take profits):
-    - Momentum declining (5d < 10d or 5d < 20d) 
-    - OR 5-day showing weakness (Weakening quadrant)
-    - OR was bullish on 20d but losing on 5d
-    - Score typically 40-65 range
-    
-    WEAK (Avoid):
-    - Low score (<40) OR
-    - Fewer than 2 timeframes bullish OR
-    - All timeframes showing Lagging
+    Uses 5-day as confirmation indicator.
     
     Args:
         etf_data_cache: Cache of theme dataframes
         theme_map: Dict mapping theme names to tickers
         
     Returns:
-        Dict with themes grouped by lifecycle stage + explanation
+        Dict with themes grouped by direction category
     """
     categories = {
-        'early_stage': [],        # Fresh bullish - BEST NEW ENTRIES
-        'established': [],        # Mature leadership - HOLD
-        'topping': [],           # Losing momentum - TAKE PROFITS
-        'weak': []               # Lagging - AVOID
+        'gaining_both': [],           # ⬈ Best
+        'gaining_mom_losing_perf': [], # ⬉ Bottoming
+        'losing_mom_gaining_perf': [], # ⬊ Topping
+        'losing_both': []             # ⬋ Worst
     }
     
     for theme, ticker in theme_map.items():
         df = etf_data_cache.get(ticker)
-        if df is None or df.empty:
+        if df is None or df.empty or len(df) < 4:
             continue
         
-        consensus = calculate_consensus_theme_score(df)
-        if not consensus:
+        try:
+            # Get last 4 days of 10-day window positions
+            if len(df) < 4:
+                continue
+                
+            recent_4_days = df.tail(4)
+            
+            # Extract 10-day positions for last 4 days
+            positions_10d = []
+            for i in range(4):
+                row = recent_4_days.iloc[i]
+                positions_10d.append({
+                    'ratio': row.get('RRG_Ratio_Med', 100),
+                    'momentum': row.get('RRG_Mom_Med', 100)
+                })
+            
+            # Calculate average of older 3 days
+            avg_ratio_old = (positions_10d[0]['ratio'] + positions_10d[1]['ratio'] + positions_10d[2]['ratio']) / 3
+            avg_momentum_old = (positions_10d[0]['momentum'] + positions_10d[1]['momentum'] + positions_10d[2]['momentum']) / 3
+            
+            # Compare today to average
+            today_ratio = positions_10d[3]['ratio']
+            today_momentum = positions_10d[3]['momentum']
+            
+            # Determine direction
+            if today_ratio > avg_ratio_old:
+                performance_direction = "Gaining Performance"
+                perf_dir_short = "gaining_perf"
+            else:
+                performance_direction = "Losing Performance"
+                perf_dir_short = "losing_perf"
+            
+            if today_momentum > avg_momentum_old:
+                momentum_direction = "Gaining Momentum"
+                mom_dir_short = "gaining_mom"
+            else:
+                momentum_direction = "Losing Momentum"
+                mom_dir_short = "losing_mom"
+            
+            # Get current quadrants for all timeframes
+            quad_5d = get_quadrant_name(
+                recent_4_days.iloc[-1].get('RRG_Ratio_Short', 100),
+                recent_4_days.iloc[-1].get('RRG_Mom_Short', 100)
+            )
+            quad_10d = get_quadrant_name(today_ratio, today_momentum)
+            quad_20d = get_quadrant_name(
+                recent_4_days.iloc[-1].get('RRG_Ratio_Long', 100),
+                recent_4_days.iloc[-1].get('RRG_Mom_Long', 100)
+            )
+            
+            # Get 5-day confirmation
+            ratio_5d = recent_4_days.iloc[-1].get('RRG_Ratio_Short', 100)
+            momentum_5d = recent_4_days.iloc[-1].get('RRG_Mom_Short', 100)
+            
+            # Check if 5d is ahead of 10d
+            if ratio_5d > today_ratio and momentum_5d > today_momentum:
+                confirmation = "5d accelerating ahead"
+            elif ratio_5d > today_ratio or momentum_5d > today_momentum:
+                confirmation = "5d confirming trend"
+            else:
+                confirmation = "5d lagging behind"
+            
+            # Build category label
+            category_label = f"{momentum_direction} & {performance_direction}"
+            
+            # Determine which bucket
+            if mom_dir_short == "gaining_mom" and perf_dir_short == "gaining_perf":
+                bucket = 'gaining_both'
+                arrow = "⬈"
+            elif mom_dir_short == "gaining_mom" and perf_dir_short == "losing_perf":
+                bucket = 'gaining_mom_losing_perf'
+                arrow = "⬉"
+            elif mom_dir_short == "losing_mom" and perf_dir_short == "gaining_perf":
+                bucket = 'losing_mom_gaining_perf'
+                arrow = "⬊"
+            else:  # losing both
+                bucket = 'losing_both'
+                arrow = "⬋"
+            
+            # Build reason
+            reason = f"10d: {momentum_direction.lower()} & {performance_direction.lower()}, {confirmation}"
+            
+            theme_info = {
+                'theme': theme,
+                'category': category_label,
+                'arrow': arrow,
+                'quadrant_5d': quad_5d,
+                'quadrant_10d': quad_10d,
+                'quadrant_20d': quad_20d,
+                'confirmation': confirmation,
+                'reason': reason
+            }
+            
+            categories[bucket].append(theme_info)
+            
+        except Exception as e:
+            logger.error(f"Error categorizing {theme}: {e}")
             continue
-        
-        # Extract data
-        score = consensus['consensus_score']
-        
-        # Get scores for each timeframe (not just quadrant!)
-        score_5d = consensus['timeframes']['5d']['score']
-        score_10d = consensus['timeframes']['10d']['score']
-        score_20d = consensus['timeframes']['20d']['score']
-        
-        # Get quadrants
-        quad_5d = consensus['timeframes']['5d']['quadrant']
-        quad_10d = consensus['timeframes']['10d']['quadrant']
-        quad_20d = consensus['timeframes']['20d']['quadrant']
-        
-        # Check freshness
-        freshness = consensus['freshness']
-        is_fresh = freshness in ["🆕 Fresh", "⭐ Early"]
-        
-        # Check if bullish (Leading or Improving)
-        bullish_quads = ['🟢 Leading', '🔵 Improving']
-        is_5d_bullish = quad_5d in bullish_quads
-        is_10d_bullish = quad_10d in bullish_quads
-        is_20d_bullish = quad_20d in bullish_quads
-        bullish_count = sum([is_5d_bullish, is_10d_bullish, is_20d_bullish])
-        
-        # CRITICAL: Check momentum trend (is it accelerating or declining?)
-        momentum_accelerating = score_5d > score_10d > score_20d
-        momentum_stable = score_5d >= score_10d >= score_20d
-        momentum_declining = score_5d < score_10d or score_5d < score_20d
-        
-        # Determine reason for categorization
-        reason = ""
-        
-        theme_info = {
-            'theme': theme,
-            'consensus_score': score,
-            'grade': consensus['grade'],
-            'freshness': consensus['freshness'],
-            'freshness_detail': consensus['freshness_detail'],
-            'tf_5d': quad_5d,
-            'tf_10d': quad_10d,
-            'tf_20d': quad_20d,
-            'score_5d': score_5d,
-            'score_10d': score_10d,
-            'score_20d': score_20d
-        }
-        
-        # ═══════════════════════════════════════════════════════
-        # CATEGORIZATION LOGIC
-        # ═══════════════════════════════════════════════════════
-        
-        # --- EARLY STAGE: Fresh + Building + Good Score ---
-        if (
-            is_fresh and 
-            bullish_count >= 2 and 
-            score >= 60 and
-            (momentum_accelerating or momentum_stable)
-        ):
-            if momentum_accelerating:
-                reason = f"Fresh position (Day {consensus['freshness_detail'].split()[-1]}), 2+ timeframes bullish, momentum accelerating ({score_5d:.0f} > {score_10d:.0f} > {score_20d:.0f})"
-            else:
-                reason = f"Fresh position (Day {consensus['freshness_detail'].split()[-1]}), 2+ timeframes bullish, momentum stable ({score_5d:.0f} ≈ {score_10d:.0f})"
-            
-            theme_info['reason'] = reason
-            categories['early_stage'].append(theme_info)
-        
-        # --- TOPPING: Momentum declining OR 5d weakening ---
-        elif (
-            momentum_declining and
-            score >= 40 and
-            (is_20d_bullish or is_10d_bullish)
-        ):
-            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f} or {score_20d:.0f})"
-            if quad_5d == '🟡 Weakening':
-                reason += f", 5-day already weakening"
-            
-            theme_info['reason'] = reason
-            categories['topping'].append(theme_info)
-        
-        # --- ESTABLISHED: High score but not fresh OR declining momentum ---
-        elif (
-            bullish_count >= 2 and
-            score >= 65 and
-            not is_fresh
-        ):
-            days = consensus['freshness_detail']
-            if momentum_declining:
-                reason = f"Strong score ({score:.0f}) but momentum declining ({score_5d:.0f} < {score_10d:.0f}), been leading for {days}"
-            else:
-                reason = f"Strong score ({score:.0f}), established position ({days}), mature trend"
-            
-            theme_info['reason'] = reason
-            categories['established'].append(theme_info)
-        
-        # --- WEAK: Everything else ---
-        else:
-            if score < 40:
-                reason = f"Low score ({score:.0f}), weak positioning"
-            elif bullish_count < 2:
-                reason = f"Only {bullish_count} of 3 timeframes bullish, insufficient confirmation"
-            else:
-                reason = f"Mixed signals, score {score:.0f} with {bullish_count} bullish timeframes"
-            
-            theme_info['reason'] = reason
-            categories['weak'].append(theme_info)
     
-    # Sort each category by score
-    for category in categories:
-        categories[category].sort(key=lambda x: x['consensus_score'], reverse=True)
+    # Sort each category by theme name
+    for category in categories.values():
+        category.sort(key=lambda x: x['theme'])
     
     return categories
+
+
+def get_quadrant_name(ratio: float, momentum: float) -> str:
+    """Convert ratio/momentum to quadrant name with emoji."""
+    if ratio >= 100 and momentum >= 100:
+        return "🟢 Leading"
+    elif ratio < 100 and momentum >= 100:
+        return "🔵 Improving"
+    elif ratio >= 100 and momentum < 100:
+        return "🟡 Weakening"
+    else:
+        return "🔴 Lagging"
     """
     Calculate comprehensive score for a theme/sector (0-100 with grade).
     
