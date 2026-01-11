@@ -7,7 +7,6 @@ Updated with Date Index Fix and Secrets management.
 import streamlit as st
 import pandas as pd
 import utils_sector as us
-import utils_darcy as ud
 
 # ==========================================
 # UI HELPERS
@@ -584,47 +583,6 @@ def run_sector_rotation_app(df_global=None):
                 alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
                 alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
                 beta = last.get(f"Beta_{stock_theme}", 1.0)
-
-                # --- NEW: DIVERGENCE CHECK ---
-                div_status = None
-                try:
-                    # Fix for prepare_data: Ensure Date is a column, not index
-                    df_for_div = sdf.copy()
-                    if isinstance(df_for_div.index, pd.DatetimeIndex):
-                        df_for_div = df_for_div.reset_index()
-                        # Ensure column is named Date so prepare_data finds it
-                        if 'Date' not in df_for_div.columns and 'index' in df_for_div.columns:
-                            df_for_div.rename(columns={'index': 'Date'}, inplace=True)
-                    
-                    # Reuse Darcy Utils logic
-                    d_d, _ = ud.prepare_data(df_for_div)
-                    
-                    if d_d is not None:
-                        # Use default settings from Price Divergences page
-                        divs = ud.find_divergences(
-                            d_d, stock, 'Daily', 
-                            lookback_period=90, 
-                            price_source='High/Low', 
-                            strict_validation=True, 
-                            recent_days_filter=25, 
-                            rsi_diff_threshold=2.0
-                        )
-                        
-                        # Find latest recent signal
-                        recent_divs = [d for d in divs if d['Is_Recent']]
-                        if recent_divs:
-                            # Sort by signal date descending
-                            recent_divs.sort(key=lambda x: x['Signal_Date_ISO'], reverse=True)
-                            latest = recent_divs[0]
-                            
-                            # Format: 🟢 Dec 18 → Jan 3
-                            emoji = "🟢" if latest['Type'] == 'Bullish' else "🔴"
-                            d1 = pd.to_datetime(latest['P1_Date_ISO']).strftime('%b %d')
-                            d2 = pd.to_datetime(latest['Signal_Date_ISO']).strftime('%b %d')
-                            div_status = f"{emoji} {d1} → {d2}"
-                except Exception:
-                    pass
-                # -----------------------------
                 
                 stock_data.append({
                     "Ticker": stock,
@@ -638,7 +596,6 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "RSI Price Div": div_status,  # Add new column
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -872,7 +829,6 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
-        "RSI Price Div": st.column_config.TextColumn("RSI Price Div", width="medium"), # Add config
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
