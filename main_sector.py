@@ -1,14 +1,11 @@
 """
 Sector Rotation App - REFACTORED VERSION
 With multi-theme support, smart filters, and comprehensive scoring.
-Updated with Date Index Fix and Secrets management.
 """
 
 import streamlit as st
 import pandas as pd
 import utils_sector as us
-# --- ADDED IMPORTS FOR DIVERGENCE LOGIC ---
-from utils_darcy import find_divergences, prepare_data
 
 # ==========================================
 # UI HELPERS
@@ -49,44 +46,13 @@ def run_sector_rotation_app(df_global=None):
         st.session_state.sector_benchmark = "SPY"
 
     # --- 1. DATA FETCH (CACHED) ---
-    # We use the existing fetcher, but we will patch the data immediately after
-    # to ensure the "Date" is a column (The Fix discussed in chat).
     with st.spinner(f"Syncing Sector Data ({st.session_state.sector_benchmark})..."):
-        try:
-            # Check for secret existence before calling logic (from chat discussion)
-            # Note: utils_sector likely uses this secret internally, but checking here gives a better error.
-            if "PARQUET_SECTOR_ROTATION" not in st.secrets and "SECTOR_UNIVERSE" not in st.secrets:
-                 st.error("🚨 Missing Secret: 'PARQUET_SECTOR_ROTATION' or 'SECTOR_UNIVERSE' not found in secrets.")
-                 return
-
-            etf_data_cache, missing_tickers, theme_map, uni_df, stock_themes = \
-                us.fetch_and_process_universe(st.session_state.sector_benchmark)
-                
-        except Exception as e:
-            st.error(f"Error loading universe: {e}")
-            return
+        etf_data_cache, missing_tickers, theme_map, uni_df, stock_themes = \
+            us.fetch_and_process_universe(st.session_state.sector_benchmark)
 
     if uni_df.empty:
-        st.warning("⚠️ Sector Universe data is empty or missing.")
+        st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
-
-    # ==============================================================================
-    # THE FIX: Force Date back into a column for all loaded dataframes
-    # ==============================================================================
-    # The loader might return Date as the Index. We need it as a column named 'DATE'
-    # for downstream analysis tools to work correctly.
-    if etf_data_cache:
-        for ticker in etf_data_cache:
-            df = etf_data_cache[ticker]
-            # Check if 'Date' or 'DATE' is missing from columns (meaning it's likely in the index)
-            if 'Date' not in df.columns and 'DATE' not in df.columns:
-                # Reset index to move Date into columns
-                df = df.reset_index()
-                # Rename to standard 'DATE' for compatibility
-                df.rename(columns={'Date': 'DATE', 'index': 'DATE'}, inplace=True)
-                # Update the cache with the fixed dataframe
-                etf_data_cache[ticker] = df
-    # ==============================================================================
 
     # --- 2. MISSING DATA CHECK ---
     if missing_tickers:
@@ -178,13 +144,7 @@ def run_sector_rotation_app(df_global=None):
             if st.session_state.sector_benchmark in etf_data_cache:
                 bench_df = etf_data_cache[st.session_state.sector_benchmark]
                 if not bench_df.empty:
-                    # Logic adjustment: since we reset index, we must find the date in the DATE column
-                    # OR check if index was preserved. Reset_index keeps old index as a column.
-                    # We'll safely check columns.
-                    if 'DATE' in bench_df.columns:
-                        last_dt = pd.to_datetime(bench_df['DATE'].iloc[-1]).strftime("%Y-%m-%d")
-                    else:
-                        last_dt = bench_df.index[-1].strftime("%Y-%m-%d")
+                    last_dt = bench_df.index[-1].strftime("%Y-%m-%d")
                     st.caption(f"📅 Data Date: {last_dt}")
 
         # --- RIGHT: SECTOR FILTERS ---
@@ -585,39 +545,6 @@ def run_sector_rotation_app(df_global=None):
                 alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
                 alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
                 beta = last.get(f"Beta_{stock_theme}", 1.0)
-
-                # --- NEW LOGIC: RSI Price Divergence ---
-                rsi_div_str = ""
-                try:
-                    # prepare_data cleans column names to standard (DATE, PRICE, HIGH, LOW, RSI, etc)
-                    # We send a copy to avoid mutating the cached dataframe used elsewhere
-                    d_d, _ = prepare_data(sdf.copy())
-                    if d_d is not None:
-                         # Defaults requested: lookback_period=90, price_source='High/Low', 
-                         # strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0
-                        divs = find_divergences(
-                            d_d, stock, 'Daily',
-                            min_n=0,
-                            periods_input=[5, 21], # minimal needed
-                            optimize_for='PF',
-                            lookback_period=90,
-                            price_source='High/Low',
-                            strict_validation=True,
-                            recent_days_filter=25,
-                            rsi_diff_threshold=2.0
-                        )
-                        # Filter to only recent
-                        recent_divs = [d for d in divs if d.get('Is_Recent')]
-                        
-                        if recent_divs:
-                            # If multiple, take the latest signal date
-                            recent_divs.sort(key=lambda x: x['Signal_Date_ISO'], reverse=True)
-                            latest_div = recent_divs[0]
-                            emoji = "🟢" if latest_div['Type'] == 'Bullish' else "🔴"
-                            rsi_div_str = f"{emoji} {latest_div['Date_Display']}"
-                except Exception:
-                    pass
-                # --------------------------------------
                 
                 stock_data.append({
                     "Ticker": stock,
@@ -631,7 +558,6 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "RSI Price Div": rsi_div_str, # Add new column here
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -652,7 +578,6 @@ def run_sector_rotation_app(df_global=None):
     st.caption("Build up to 5 filters. Filters apply automatically as you change them.")
     
     # Filterable columns (numeric and categorical)
-    # NOTE: "RSI Price Div" EXCLUDED as requested
     numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
     categorical_columns = ["Theme", "Theme Category"]
     all_filter_columns = numeric_columns + categorical_columns
@@ -866,8 +791,6 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
-        # ADDED CONFIG FOR NEW COLUMN
-        "RSI Price Div": st.column_config.TextColumn("RSI Price Div", width="medium", help="Recent Daily Bullish/Bearish Divergence (High/Low method, 90d lookback)"),
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
