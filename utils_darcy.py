@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: mr-darcys-manor-main (15).zip/mr-darcys-manor-main/utils_darcy.py
+fullContent:
 # --- IMPORTS ---
 import streamlit as st
 import pandas as pd
@@ -20,6 +24,17 @@ EMA21_PERIOD = 21
 
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
+
+# --- SHARED SETTINGS (SOURCE OF TRUTH) ---
+# Defaults for Price Divergence Scans (Used by Main App and Sector App)
+RSI_DIV_DEFAULTS = {
+    "lookback_period": 90,
+    "price_source": "High/Low",
+    "strict_validation": True,
+    "recent_days_filter": 25,
+    "rsi_diff_threshold": 2.0,
+    "periods_input": [5, 21, 63, 126, 252]
+}
 
 # --- DATA LOADERS & GOOGLE DRIVE UTILS ---
 
@@ -162,14 +177,11 @@ def add_technicals(df):
     
     # Check if we already have the columns to avoid re-calc overhead
     cols = set(df.columns)
-    
-    # UPDATED CHECKS: Now looking for your specific column names (RSI14, EMA8, etc.)
-    has_rsi = 'RSI' in cols or 'RSI_14' in cols or 'RSI14' in cols
+    has_rsi = 'RSI_14' in cols or 'RSI14' in cols 
     has_ema8 = 'EMA_8' in cols or 'EMA8' in cols
     has_ema21 = 'EMA_21' in cols or 'EMA21' in cols
     has_sma200 = 'SMA_200' in cols or 'SMA200' in cols
     
-    # If all exist, return immediately to save time
     if has_rsi and has_ema8 and has_ema21 and has_sma200:
         return df
 
@@ -407,7 +419,9 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             'RSI1': rsi_p1, 'RSI2': rsi_p2,
             'Price1': price_p1, 'Price2': price_p2,
             'Day1_Volume': vol_p1, 'Day2_Volume': vol_p2,
-            'Is_Recent': is_recent
+            'Is_Recent': is_recent,
+            'P1_Date_Short': get_date_str(idx_p1_abs, '%b %d'),
+            'Signal_Date_Short': get_date_str(i, '%b %d')
         }
 
         # Tags
@@ -429,7 +443,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
         
         # Display Strings
-        date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
+        date_display = f"{div_obj['P1_Date_Short']} → {div_obj['Signal_Date_Short']}"
         rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
@@ -1020,3 +1034,72 @@ def get_ticker_technicals(ticker: str, mapping: dict):
         except Exception:
             return None
     return None
+
+# --- NEW HELPERS FOR SECTOR APP ---
+
+def get_latest_divergence_signal(df, ticker):
+    """
+    Finds the single most recent divergence signal using standardized defaults.
+    Applies the specific 'Reset Index' fix for data passed from the Sector App.
+    """
+    try:
+        # FIX: Ensure Date is available as a column for prepare_data
+        d_df = df.copy()
+        if isinstance(d_df.index, pd.DatetimeIndex):
+            d_df = d_df.reset_index()
+            
+        # Prepare Data (calculates VolSMA etc)
+        d_d, _ = prepare_data(d_df)
+        
+        if d_d is None or d_d.empty:
+            return None
+            
+        # Run Scan
+        divs = find_divergences(
+            d_d, 
+            ticker, 
+            'Daily', 
+            **RSI_DIV_DEFAULTS
+        )
+        
+        if not divs:
+            return None
+            
+        # Filter for recent only
+        recent_divs = [d for d in divs if d.get('Is_Recent', False)]
+        
+        if recent_divs:
+            # Sort by date descending (newest first)
+            recent_divs.sort(key=lambda x: x['Signal_Date_ISO'], reverse=True)
+            top_signal = recent_divs[0]
+            
+            emoji = "🟢" if top_signal['Type'] == 'Bullish' else "🔴"
+            return f"{emoji} {top_signal['Date_Display']}"
+            
+        return None
+    except Exception:
+        return None
+
+def get_last_trade_info(df_global, ticker):
+    """
+    Finds the last trade date for a ticker and determines if it's recent (<= 10 days).
+    """
+    try:
+        if df_global is None or df_global.empty:
+            return None, False
+            
+        t_rows = df_global[df_global["Symbol"] == ticker]
+        if t_rows.empty:
+            return None, False
+            
+        last_date = t_rows["Trade Date"].max()
+        if pd.isna(last_date):
+            return None, False
+            
+        days_diff = (date.today() - last_date.date()).days
+        is_recent = days_diff <= 10
+        
+        return last_date.strftime("%d %b %y"), is_recent
+    except Exception:
+        return None, False
+}
