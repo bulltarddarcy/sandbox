@@ -496,29 +496,34 @@ def prepare_data(df):
     df_d.dropna(subset=['Price', 'RSI'], inplace=True)
     
     # 4. Create WEEKLY DataFrame
-    w_cols = [c for c in df.columns if c.startswith('W_')]
+    # STRICT MAPPING based on User Requirement
+    # Source Columns: W_OPEN, W_HIGH, W_LOW, W_CLOSE, W_VOLUME, W_EMA8, W_EMA21, W_SMA50, W_SMA100, W_SMA200, W_RSI14
     
-    if not w_cols:
+    weekly_cols_map = {
+        'W_CLOSE': 'Price', 
+        'W_HIGH': 'High',
+        'W_LOW': 'Low',
+        'W_OPEN': 'Open',
+        'W_VOLUME': 'Volume',
+        'W_RSI14': 'RSI',
+        'W_EMA8': 'EMA8',
+        'W_EMA21': 'EMA21',
+        'W_SMA50': 'SMA50',
+        'W_SMA100': 'SMA100',
+        'W_SMA200': 'SMA200'
+    }
+    
+    available_w_cols = [c for c in weekly_cols_map.keys() if c in df.columns]
+    
+    if not available_w_cols:
         return df_d, None
 
-    df_w = df[w_cols].copy()
-    
-    # Rename W_CLOSE -> Price, W_RSI14 -> RSI using same logic
-    new_names = {}
-    for c in df_w.columns:
-        core_name = c.replace('W_', '') # W_CLOSE -> CLOSE
-        if core_name in daily_map:
-            new_names[c] = daily_map[core_name] # CLOSE -> Price
-        else:
-            new_names[c] = core_name.title() # Fallback for others
-            
-    df_w.rename(columns=new_names, inplace=True)
+    df_w = df[available_w_cols].rename(columns=weekly_cols_map).copy()
     
     # Set ChartDate for weekly (start of week)
     df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
     
-    # CRITICAL FIX: Compress to 1 row per week to ensure "90 periods" means "90 Weeks"
-    # and not "90 Days of Stepped Data".
+    # CRITICAL FIX: Compress to 1 row per week.
     df_w = df_w.groupby('ChartDate').last().sort_index()
     
     # Ensure ChartDate is available as a column for display logic
@@ -528,7 +533,12 @@ def prepare_data(df):
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         
     df_w = add_technicals(df_w)
-    df_w.dropna(subset=['Price', 'RSI'], inplace=True)
+    
+    # Only validate if mapped successfully
+    if 'Price' in df_w.columns and 'RSI' in df_w.columns:
+        df_w.dropna(subset=['Price', 'RSI'], inplace=True)
+    else:
+        return df_d, None
         
     return df_d, df_w
 
