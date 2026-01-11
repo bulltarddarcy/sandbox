@@ -43,6 +43,7 @@ def run_database_app(df):
     
     # Filter
     f = df.copy()
+    # Uses ud.COL_... constants now
     if db_ticker: f = f[f[ud.COL_SYMBOL].astype(str).str.upper().eq(db_ticker)]
     if start_date: f = f[f[ud.COL_TRADE_DATE].dt.date >= start_date]
     if end_date: f = f[f[ud.COL_TRADE_DATE].dt.date <= end_date]
@@ -52,6 +53,8 @@ def run_database_app(df):
     if inc_cb: allowed_types.append("Calls Bought")
     if inc_pb: allowed_types.append("Puts Bought")
     if inc_ps: allowed_types.append("Puts Sold")
+    
+    # Simplified column access (No more "if 'Order Type' in...")
     f = f[f[ud.COL_ORDER_TYPE].isin(allowed_types)]
     
     if f.empty:
@@ -64,7 +67,6 @@ def run_database_app(df):
     f_display = f[display_cols].copy()
     
     f_display[ud.COL_TRADE_DATE] = f_display[ud.COL_TRADE_DATE].dt.strftime("%d %b %y")
-    # Expiry is string in raw, but we want fmt
     
     def highlight_db_order_type(val):
         if val in ["Calls Bought", "Puts Sold"]: return 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: 600;'
@@ -79,6 +81,7 @@ def run_database_app(df):
     )
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
+
 # ==========================================
 # APP 2: RANKINGS
 # ==========================================
@@ -89,16 +92,28 @@ def run_rankings_app(df):
     
     if 'saved_rank_start' not in st.session_state: st.session_state.saved_rank_start = start_default
     if 'saved_rank_end' not in st.session_state: st.session_state.saved_rank_end = max_data_date
+    if 'saved_rank_limit' not in st.session_state: st.session_state.saved_rank_limit = 20
+    if 'saved_rank_mc' not in st.session_state: st.session_state.saved_rank_mc = "10B"
+    if 'saved_rank_ema' not in st.session_state: st.session_state.saved_rank_ema = False
+
+    def save_rank_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
     
-    c1, c2 = st.columns(2)
-    with c1: rank_start = st.date_input("Start", value=st.session_state.saved_rank_start)
-    with c2: rank_end = st.date_input("End", value=st.session_state.saved_rank_end)
-    
-    # Calculate Smart Money Scores using Utils
+    c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
+    with c1: rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
+    with c2: rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
+    with c3: limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
+    with c4: 
+        min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
+        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
+        
+    mc_thresh = ud.MC_THRESHOLDS.get(min_mkt_cap_rank, 1e10)
+
+    # Use heavy logic from Utils
     top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(
-        df, rank_start, rank_end, ud.MC_THRESHOLDS["10B"], False, 20
+        df, rank_start, rank_end, mc_thresh, filter_ema, limit
     )
-    
+
     st.subheader("Bullish Smart Money")
     st.dataframe(top_bulls, use_container_width=True)
 
@@ -131,7 +146,7 @@ def run_pivot_tables_app(df):
 
 
 # ==========================================
-# APP 4: EMA DISTANCE (Refactored)
+# APP 4: EMA DISTANCE
 # ==========================================
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
@@ -143,35 +158,39 @@ def run_ema_distance_app(df_global):
     if not ticker: return
 
     with st.spinner(f"Crunching data for {ticker}..."):
-        # 1. Fetch History using optimized loader
         t_map = ud.load_ticker_map()
+        # Uses Optimized Fetch (Parquet -> CSV -> Yahoo)
         df = ud.fetch_history_optimized(ticker, t_map)
         
         if df is None or df.empty:
             st.error("No data found.")
             return
 
-        # 2. Calculate Distances (Using Uppercase Columns)
+        # Uses Pre-Calculated Columns via Constants
+        # Note: add_technicals in utils ensures these columns exist
         close = df[ud.COL_CLOSE]
         
-        # Calculate needed MAs if missing (Parquet might have some, but we need specific ones)
+        # Ensure tech columns exist
+        df = ud.add_technicals(df) 
+        
+        # Calculate needed MAs if missing
         if ud.COL_EMA8 not in df.columns: df[ud.COL_EMA8] = close.ewm(span=8).mean()
         if ud.COL_EMA21 not in df.columns: df[ud.COL_EMA21] = close.ewm(span=21).mean()
-        df[ud.COL_SMA50] = close.rolling(50).mean()
-        df[ud.COL_SMA100] = close.rolling(100).mean()
+        if ud.COL_SMA50 not in df.columns: df[ud.COL_SMA50] = close.rolling(50).mean()
+        if ud.COL_SMA100 not in df.columns: df[ud.COL_SMA100] = close.rolling(100).mean()
         if ud.COL_SMA200 not in df.columns: df[ud.COL_SMA200] = close.rolling(200).mean()
         
-        # Gaps
+        # Calculate Distances
         df['Dist_8'] = ((close - df[ud.COL_EMA8]) / df[ud.COL_EMA8]) * 100
         df['Dist_50'] = ((close - df[ud.COL_SMA50]) / df[ud.COL_SMA50]) * 100
         
         current_gap = df['Dist_50'].iloc[-1]
-        
         st.metric(f"Current Gap vs 50SMA", f"{current_gap:.2f}%")
         
         # Chart
         chart_data = df[[ud.COL_DATE, 'Dist_50']].tail(500)
         st.bar_chart(chart_data, x=ud.COL_DATE, y='Dist_50')
+
 
 # ==========================================
 # APP 5: SEASONALITY
@@ -191,7 +210,6 @@ def run_seasonality_app(df_global):
             
         if not ticker: return
             
-        # Load Data
         t_map = ud.load_ticker_map()
         df = ud.fetch_history_optimized(ticker, t_map)
         
@@ -199,7 +217,6 @@ def run_seasonality_app(df_global):
             st.error("No data found.")
             return
 
-        # Prepare Monthly Stats (Logic moved to simple pandas ops here)
         df[ud.COL_DATE] = pd.to_datetime(df[ud.COL_DATE])
         df.set_index(ud.COL_DATE, inplace=True)
         
@@ -216,32 +233,18 @@ def run_seasonality_app(df_global):
             st.warning("Not enough data for this lookback.")
             return
 
-        # Pivot Table: Year vs Month
+        # Pivot Table
         m_df = monthly_ret.to_frame(name='Return')
         m_df['Year'] = m_df.index.year
-        m_df['Month'] = m_df.index.strftime('%b')
         m_df['Month_Num'] = m_df.index.month
         
         pivot_ret = m_df.pivot_table(values='Return', index='Year', columns='Month_Num', aggfunc='sum')
         pivot_ret.columns = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
         
-        # Heatmap Visualization
         st.subheader(f"Monthly Returns ({lookback}Y Lookback)")
         st.dataframe(pivot_ret.style.format("{:.1%}")
                      .background_gradient(cmap='RdYlGn', vmin=-0.1, vmax=0.1), 
                      use_container_width=True)
-        
-        # Aggregate Win Rate
-        win_rates = (pivot_ret > 0).mean() * 100
-        avg_rets = pivot_ret.mean() * 100
-        
-        stats_df = pd.DataFrame({
-            "Win Rate %": win_rates,
-            "Avg Return %": avg_rets
-        }).T
-        
-        st.subheader("Aggregate Stats by Month")
-        st.dataframe(stats_df.style.format("{:.1f}%").background_gradient(cmap='Blues'), use_container_width=True)
 
     # --- TAB 2: SCANNER ---
     with tab2:
@@ -255,14 +258,13 @@ def run_seasonality_app(df_global):
 
         if st.button("Run Seasonality Scan"):
             t_map = ud.load_ticker_map()
-            tickers_to_scan = list(t_map.keys()) # Or filter specific list
+            tickers_to_scan = list(t_map.keys()) 
             
             results = []
             progress = st.progress(0)
             
-            # Using ThreadPool from Utils would be cleaner, but keeping explicit here for progress bar updates
             with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(ud.calculate_forward_seasonality, t, t_map, scan_date, lookback): t for t in tickers_to_scan[:50]} # Limit to 50 for demo speed
+                futures = {executor.submit(ud.calculate_forward_seasonality, t, t_map, scan_date, lookback): t for t in tickers_to_scan[:50]} 
                 
                 completed = 0
                 for future in as_completed(futures):
@@ -280,10 +282,11 @@ def run_seasonality_app(df_global):
             else:
                 st.info("No tickers found matching criteria.")
 
+
 # ==========================================
 # APP 6: RSI SCANNER
 # ==========================================
-def run_rsi_scanner_app():
+def run_rsi_scanner_app(df_global=None):
     st.title("📡 RSI Scanner")
     
     # Configuration
@@ -295,17 +298,14 @@ def run_rsi_scanner_app():
     with c3:
         min_mc = st.selectbox("Min Market Cap", options=ud.MC_THRESHOLDS.keys(), index=2)
     
-    # Load Data (Using Parquet Config)
     pq_config = ud.get_parquet_config()
     if not pq_config:
         st.error("Parquet Config missing.")
         return
         
-    # We will iterate through configured files to find opportunities
     results = []
     
     with st.spinner("Scanning Market Data..."):
-        # Helper to process one file
         def process_file(key):
             df = ud.load_parquet_and_clean(key)
             if df is None or df.empty: return []
@@ -327,7 +327,6 @@ def run_rsi_scanner_app():
             hits['Source'] = key
             return hits.to_dict('records')
 
-        # Run parallel scan
         with ThreadPoolExecutor() as exc:
             futures = [exc.submit(process_file, k) for k in pq_config.keys()]
             for f in as_completed(futures):
@@ -353,10 +352,11 @@ def run_rsi_scanner_app():
         use_container_width=True
     )
 
+
 # ==========================================
 # APP 7: PRICE DIVERGENCES
 # ==========================================
-def run_price_divergences_app():
+def run_price_divergences_app(df_global=None):
     st.title("📉 Price Divergences (RSI)")
     
     # Controls
@@ -378,26 +378,22 @@ def run_price_divergences_app():
         st.error("No data.")
         return
         
-    # Prepare Data (Split Daily/Weekly)
+    # Prepare Data
     df_d, df_w = ud.prepare_data(df)
-    
     target_df = df_w if timeframe == "Weekly" and df_w is not None else df_d
     
     if target_df is None:
         st.error("Weekly data not available.")
         return
         
-    # Find Divergences
+    # Find Divergences (Logic entirely in Utils)
     divs = ud.find_divergences(target_df, div_ticker, timeframe, lookback_period=lookback)
     
     if not divs:
         st.info(f"No {timeframe} divergences found in last {lookback} periods.")
-        
-        # Plotting Price anyway
         st.line_chart(target_df.set_index(ud.COL_DATE if ud.COL_DATE in target_df.columns else target_df.index)[ud.COL_CLOSE])
         return
         
-    # Display Results
     st.success(f"Found {len(divs)} divergences.")
     res_df = pd.DataFrame(divs)
     
@@ -406,7 +402,7 @@ def run_price_divergences_app():
         use_container_width=True
     )
     
-    # Visuals: Add Markers to chart
+    # Visuals
     chart_base = alt.Chart(target_df.tail(lookback*2)).encode(x=f'{ud.COL_DATE}:T')
     
     line = chart_base.mark_line().encode(y=ud.COL_CLOSE)
@@ -421,46 +417,20 @@ def run_price_divergences_app():
     st.altair_chart(line + points, use_container_width=True)
 
 # ==========================================
-# MAIN ROUTER
+# APP 8: STRIKE ZONES
 # ==========================================
-def run():
-    # Sidebar Navigation
-    st.sidebar.title("💎 Mr. Darcy's Manor")
+def run_strike_zones_app(df):
+    st.title("📊 Strike Zones")
     
-    app_mode = st.sidebar.radio("Navigation", [
-        "Database",
-        "Rankings",
-        "Pivot Tables",
-        "EMA Distance",
-        "Seasonality",
-        "RSI Scanner",
-        "Price Divergences"
-    ])
+    col_settings, col_visuals = st.columns([1, 2.5])
     
-    # Load Global Data (Only once)
-    # Note: We rely on cache in utils to prevent re-downloading on every click
-    DATA_URL = st.secrets.get("URL_DATA_MAIN")
-    if not DATA_URL:
-        st.error("Global Data URL missing in secrets.")
+    with col_settings:
+        ticker = st.text_input("Ticker", value="AMZN").strip().upper()
+        
+    f_base = df[df[ud.COL_SYMBOL].astype(str).str.upper().eq(ticker)].copy()
+    
+    if f_base.empty:
+        st.warning("No trades found.")
         return
-
-    df_global = ud.load_and_clean_data(DATA_URL)
-    
-    # Router
-    if app_mode == "Database":
-        run_database_app(df_global)
-    elif app_mode == "Rankings":
-        run_rankings_app(df_global)
-    elif app_mode == "Pivot Tables":
-        run_pivot_tables_app(df_global)
-    elif app_mode == "EMA Distance":
-        run_ema_distance_app(df_global)
-    elif app_mode == "Seasonality":
-        run_seasonality_app(df_global)
-    elif app_mode == "RSI Scanner":
-        run_rsi_scanner_app()
-    elif app_mode == "Price Divergences":
-        run_price_divergences_app()
-
-if __name__ == "__main__":
-    run()
+        
+    st.dataframe(f_base, use_container_width=True)
