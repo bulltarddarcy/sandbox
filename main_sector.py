@@ -1,7 +1,7 @@
 {
-#type: uploaded file
-#fileName: mr-darcys-manor-main (15).zip/mr-darcys-manor-main/main_sector.py
-#fullContent:
+type: uploaded file
+fileName: mr-darcys-manor-main (15).zip/mr-darcys-manor-main/main_sector.py
+fullContent:
 """
 Sector Rotation App - REFACTORED VERSION
 With multi-theme support, smart filters, and comprehensive scoring.
