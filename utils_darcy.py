@@ -468,8 +468,13 @@ def prepare_data(df):
     # Map Standard Cols -> Internal App Names
     daily_map = {
         'CLOSE': 'Price', 'VOLUME': 'Volume', 
-        'HIGH': 'High', 'LOW': 'Low', 
-        'RSI14': 'RSI', 'EMA8': 'EMA8', 'EMA21': 'EMA21'
+        'HIGH': 'High', 'LOW': 'Low', 'OPEN': 'Open',
+        'RSI': 'RSI', 'RSI14': 'RSI', 'RSI_14': 'RSI',
+        'EMA8': 'EMA8', 'EMA_8': 'EMA8',
+        'EMA21': 'EMA21', 'EMA_21': 'EMA21',
+        'SMA50': 'SMA50', 'SMA_50': 'SMA50',
+        'SMA100': 'SMA100', 'SMA_100': 'SMA100',
+        'SMA200': 'SMA200', 'SMA_200': 'SMA200'
     }
     
     # Select available cols
@@ -511,6 +516,13 @@ def prepare_data(df):
     
     # Set ChartDate for weekly (start of week)
     df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
+    
+    # CRITICAL FIX: Compress to 1 row per week to ensure "90 periods" means "90 Weeks"
+    # and not "90 Days of Stepped Data".
+    df_w = df_w.groupby('ChartDate').last().sort_index()
+    
+    # Ensure ChartDate is available as a column for display logic
+    df_w['ChartDate'] = df_w.index
     
     if 'Volume' in df_w.columns:
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
