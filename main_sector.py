@@ -834,6 +834,7 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
+        "RSI Price Div": st.column_config.TextColumn("RSI Price Div", width="medium"), # Add config
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
