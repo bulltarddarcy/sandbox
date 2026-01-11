@@ -7,6 +7,8 @@ Updated with Date Index Fix and Secrets management.
 import streamlit as st
 import pandas as pd
 import utils_sector as us
+# --- ADDED IMPORTS FOR DIVERGENCE LOGIC ---
+from utils_darcy import find_divergences, prepare_data
 
 # ==========================================
 # UI HELPERS
@@ -583,6 +585,39 @@ def run_sector_rotation_app(df_global=None):
                 alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
                 alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
                 beta = last.get(f"Beta_{stock_theme}", 1.0)
+
+                # --- NEW LOGIC: RSI Price Divergence ---
+                rsi_div_str = ""
+                try:
+                    # prepare_data cleans column names to standard (DATE, PRICE, HIGH, LOW, RSI, etc)
+                    # We send a copy to avoid mutating the cached dataframe used elsewhere
+                    d_d, _ = prepare_data(sdf.copy())
+                    if d_d is not None:
+                         # Defaults requested: lookback_period=90, price_source='High/Low', 
+                         # strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0
+                        divs = find_divergences(
+                            d_d, stock, 'Daily',
+                            min_n=0,
+                            periods_input=[5, 21], # minimal needed
+                            optimize_for='PF',
+                            lookback_period=90,
+                            price_source='High/Low',
+                            strict_validation=True,
+                            recent_days_filter=25,
+                            rsi_diff_threshold=2.0
+                        )
+                        # Filter to only recent
+                        recent_divs = [d for d in divs if d.get('Is_Recent')]
+                        
+                        if recent_divs:
+                            # If multiple, take the latest signal date
+                            recent_divs.sort(key=lambda x: x['Signal_Date_ISO'], reverse=True)
+                            latest_div = recent_divs[0]
+                            emoji = "🟢" if latest_div['Type'] == 'Bullish' else "🔴"
+                            rsi_div_str = f"{emoji} {latest_div['Date_Display']}"
+                except Exception:
+                    pass
+                # --------------------------------------
                 
                 stock_data.append({
                     "Ticker": stock,
@@ -596,6 +631,7 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
+                    "RSI Price Div": rsi_div_str, # Add new column here
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -616,6 +652,7 @@ def run_sector_rotation_app(df_global=None):
     st.caption("Build up to 5 filters. Filters apply automatically as you change them.")
     
     # Filterable columns (numeric and categorical)
+    # NOTE: "RSI Price Div" EXCLUDED as requested
     numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
     categorical_columns = ["Theme", "Theme Category"]
     all_filter_columns = numeric_columns + categorical_columns
@@ -829,6 +866,8 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
+        # ADDED CONFIG FOR NEW COLUMN
+        "RSI Price Div": st.column_config.TextColumn("RSI Price Div", width="medium", help="Recent Daily Bullish/Bearish Divergence (High/Low method, 90d lookback)"),
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
